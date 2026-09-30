@@ -156,6 +156,9 @@ class LinePlotWidget(QWidget):
             # Update legend text if custom label passed
             pass
 
+    def set_x_range(self, x_min: float, x_max: float) -> None:
+        self.plot_item.setXRange(x_min, x_max)
+
     def set_y_limits(self, y_min: float, y_max: float) -> None:
         self.plot_item.setYRange(y_min, y_max)
 
@@ -168,14 +171,15 @@ def envelope_to_time_ps(t_s: np.ndarray) -> np.ndarray:
 def envelope_to_wavelength_nm(omega_grid: np.ndarray, omega0: float) -> Tuple[np.ndarray, np.ndarray]:
     """Convert angular frequency grid to wavelength [nm] and return sorted (wl_nm, sort_indices)."""
     omega_total = omega0 + omega_grid
-    # Filter physical positive frequencies
-    valid = omega_total > 1e10
-    wl_m = np.zeros_like(omega_total)
-    wl_m[valid] = 2.0 * np.pi * C_LIGHT / omega_total[valid]
-    wl_nm = wl_m * 1e9
-
-    sort_idx = np.argsort(wl_nm)
-    return wl_nm[sort_idx], sort_idx
+    MIN_OMEGA = 1e12  # well below any optical frequency
+    valid_mask = omega_total > MIN_OMEGA
+    
+    valid_omega = omega_total[valid_mask]
+    valid_wl_nm = (2.0 * np.pi * C_LIGHT / valid_omega) * 1e9
+    valid_idx = np.where(valid_mask)[0]
+    
+    sort_order = np.argsort(valid_wl_nm)
+    return valid_wl_nm[sort_order], valid_idx[sort_order]
 
 
 def spectrum_to_db(a_w: np.ndarray, omega_grid: np.ndarray, omega0: float, db_floor: float = -200.0) -> Tuple[np.ndarray, np.ndarray]:
@@ -184,7 +188,7 @@ def spectrum_to_db(a_w: np.ndarray, omega_grid: np.ndarray, omega0: float, db_fl
 
     # Power spectral density S(w) = |A_w|^2
     # Conversion to S(lambda): S(lambda) = S(w) * (2*pi*c / lambda^2)
-    wl_m = np.maximum(wl_nm * 1e-9, 1e-12)
+    wl_m = wl_nm * 1e-9
     jacobian = 2.0 * np.pi * C_LIGHT / (wl_m**2)
 
     psd_lambda = np.abs(a_w[sort_idx]) ** 2 * jacobian

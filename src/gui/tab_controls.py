@@ -5,18 +5,55 @@ Enforces strict scientific typography and physical units in brackets across all 
 
 from __future__ import annotations
 
+import os
 import math
 from typing import Optional, List
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QComboBox,
-    QCheckBox, QPushButton, QGroupBox, QScrollArea, QFormLayout, QFileDialog
+    QCheckBox, QPushButton, QGroupBox, QScrollArea, QFormLayout, QFileDialog, QStackedWidget,
+    QMessageBox
 )
 
 from src.solver.config import (
     PulseConfig, FiberConfig, DispersionConfig, SolverConfig,
     ps2_km_to_si, ps3_km_to_si, psk_km_to_si
 )
+
+
+
+class ManualDispersionWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QFormLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.txt_beta2 = QLineEdit("-1.276")
+        self.txt_beta3 = QLineEdit("8.119")
+        self.txt_beta4 = QLineEdit("-1.321")
+        self.txt_beta5 = QLineEdit("3.032")
+        self.txt_beta6 = QLineEdit("-4.196")
+        self.txt_beta7 = QLineEdit("2.570")
+
+        layout.addRow("β₂ [ps² m⁻¹] × 10⁻²:", self.txt_beta2)
+        layout.addRow("β₃ [ps³ m⁻¹] × 10⁻⁵:", self.txt_beta3)
+        layout.addRow("β₄ [ps⁴ m⁻¹] × 10⁻⁷:", self.txt_beta4)
+        layout.addRow("β₅ [ps⁵ m⁻¹] × 10⁻¹⁰:", self.txt_beta5)
+        layout.addRow("β₆ [ps⁶ m⁻¹] × 10⁻¹³:", self.txt_beta6)
+        layout.addRow("β₇ [ps⁷ m⁻¹] × 10⁻¹⁶:", self.txt_beta7)
+
+    def get_betas_si(self):
+        from src.solver.config import DispersionConfig
+        try:
+            b2 = DispersionConfig.ps_m_to_si(2, float(self.txt_beta2.text()) * 10**-2)
+            b3 = DispersionConfig.ps_m_to_si(3, float(self.txt_beta3.text()) * 10**-5)
+            b4 = DispersionConfig.ps_m_to_si(4, float(self.txt_beta4.text()) * 10**-7)
+            b5 = DispersionConfig.ps_m_to_si(5, float(self.txt_beta5.text()) * 10**-10)
+            b6 = DispersionConfig.ps_m_to_si(6, float(self.txt_beta6.text()) * 10**-13)
+            b7 = DispersionConfig.ps_m_to_si(7, float(self.txt_beta7.text()) * 10**-16)
+            return [b2, b3, b4, b5, b6, b7]
+        except ValueError:
+            return [0.0] * 6
 
 
 class TabControlsWidget(QWidget):
@@ -27,9 +64,13 @@ class TabControlsWidget(QWidget):
     resume_requested = pyqtSignal()
     abort_requested = pyqtSignal()
     simulation_type_changed = pyqtSignal(str)  # "spectrum_vs_distance" or "spectrum_vs_power"
-    wavelength_changed = pyqtSignal(float)     # wavelength in meters
+    wavelength_changed = pyqtSignal(float)
+    dispersion_mode_changed = pyqtSignal(int)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
+        self.manual_disp = None
+        self.file_nav = None
+        self.active_import_file: str = ""
         super().__init__(parent)
 
         main_layout = QVBoxLayout(self)
@@ -47,7 +88,7 @@ class TabControlsWidget(QWidget):
         preset_layout = QHBoxLayout(preset_group)
         self.combo_presets = QComboBox()
         self.combo_presets.addItems([
-            "Johan Hult 2007 Benchmark (PCF SCG at 835 nm)",
+            "Johan Hult 2007 Benchmark (PCF SCG at 850 nm)",
             "Fundamental Soliton N=1 Invariant (SMF-28 at 1550 nm)",
             "Standard Telecom Pulse (SMF-28 at 1550 nm)",
             "Custom User Configuration",
@@ -55,6 +96,17 @@ class TabControlsWidget(QWidget):
         self.combo_presets.currentIndexChanged.connect(self._on_preset_changed)
         preset_layout.addWidget(QLabel("Preset:"))
         preset_layout.addWidget(self.combo_presets, 1)
+        
+        btn_layout = QHBoxLayout()
+        self.btn_import_config = QPushButton("📂 Import Config")
+        self.btn_export_config = QPushButton("💾 Export Config")
+        btn_layout.addWidget(self.btn_import_config)
+        btn_layout.addWidget(self.btn_export_config)
+        preset_layout.addLayout(btn_layout)
+        
+        self.btn_import_config.clicked.connect(self._on_import_config)
+        self.btn_export_config.clicked.connect(self._on_export_config)
+
         layout.addWidget(preset_group)
 
         # -------------------------------------------------------------
@@ -115,11 +167,11 @@ class TabControlsWidget(QWidget):
         pulse_form.addRow("Sweep Points: N_P [points]:", self.txt_power_steps)
         self._set_power_sweep_visible(False)
 
-        self.txt_wavelength = QLineEdit("835.0")  # nm
+        self.txt_wavelength = QLineEdit("850.0")  # nm
         self.txt_wavelength.textChanged.connect(self._update_omega0_display)
         pulse_form.addRow("Wavelength: Carrier λ₀ [nm]:", self.txt_wavelength)
 
-        self.lbl_omega0_info = QLabel("ω₀ = 2.257 × 10¹⁵ rad/s (f₀ = 359.03 THz)")
+        self.lbl_omega0_info = QLabel("ω₀ = 2.218 × 10¹⁵ rad/s (f₀ = 352.69 THz)")
         self.lbl_omega0_info.setStyleSheet("color: #888888; font-size: 9pt;")
         pulse_form.addRow("", self.lbl_omega0_info)
 
@@ -134,10 +186,10 @@ class TabControlsWidget(QWidget):
         fiber_group = QGroupBox("Fiber Properties & Dispersion Profile")
         fiber_form = QFormLayout(fiber_group)
 
-        self.txt_length = QLineEdit("15.0")  # cm
+        self.txt_length = QLineEdit("10.0")  # cm
         fiber_form.addRow("Length: Fiber Length L [cm]:", self.txt_length)
 
-        self.txt_gamma = QLineEdit("110.0")  # W^-1 km^-1
+        self.txt_gamma = QLineEdit("45.0")  # W^-1 km^-1
         self.txt_gamma.setToolTip("1 W⁻¹·km⁻¹ = 10⁻³ W⁻¹·m⁻¹")
         fiber_form.addRow("Nonlinearity: Gamma γ [W⁻¹·km⁻¹]:", self.txt_gamma)
 
@@ -159,32 +211,6 @@ class TabControlsWidget(QWidget):
         fiber_form.addRow("Dispersion Mode:", self.combo_disp_mode)
 
         # Manual beta inputs (beta2 to beta7)
-        self.txt_beta2 = QLineEdit("-11.83")  # ps^2/km
-        self.txt_beta3 = QLineEdit("0.081")   # ps^3/km
-        self.txt_beta4 = QLineEdit("-0.000116") # ps^4/km
-        self.txt_beta5 = QLineEdit("0.00000259")# ps^5/km
-        self.txt_beta6 = QLineEdit("0.0000000538")# ps^6/km
-        self.txt_beta7 = QLineEdit("0.0")     # ps^7/km
-
-        fiber_form.addRow("β₂ [ps²/km]:", self.txt_beta2)
-        fiber_form.addRow("β₃ [ps³/km]:", self.txt_beta3)
-        fiber_form.addRow("β₄ [ps⁴/km]:", self.txt_beta4)
-        fiber_form.addRow("β₅ [ps⁵/km]:", self.txt_beta5)
-        fiber_form.addRow("β₆ [ps⁶/km]:", self.txt_beta6)
-        fiber_form.addRow("β₇ [ps⁷/km]:", self.txt_beta7)
-
-        # Import file display
-        self.txt_import_path = QLineEdit("")
-        self.txt_import_path.setReadOnly(True)
-        self.txt_import_path.setPlaceholderText("Select file from right navigator or browse...")
-        self.btn_browse_disp = QPushButton("Browse...")
-        self.btn_browse_disp.clicked.connect(self._on_browse_file)
-        import_row = QHBoxLayout()
-        import_row.addWidget(self.txt_import_path)
-        import_row.addWidget(self.btn_browse_disp)
-        fiber_form.addRow("Active File:", import_row)
-        self._set_manual_betas_visible(True)
-        self._set_import_path_visible(False)
 
         layout.addWidget(fiber_group)
 
@@ -195,7 +221,7 @@ class TabControlsWidget(QWidget):
         grid_form = QFormLayout(grid_group)
 
         self.combo_grid_n = QComboBox()
-        self.combo_grid_n.addItems(["1024", "2048", "4096", "8192", "16384"])
+        self.combo_grid_n.addItems(["1024", "2048", "4096", "8192", "16384", "32768", "65536", "131072", "Auto"])
         self.combo_grid_n.setCurrentText("8192")
         self.combo_grid_n.currentIndexChanged.connect(self._check_raman_advisory)
         grid_form.addRow("Grid Size: N [points]:", self.combo_grid_n)
@@ -256,29 +282,16 @@ class TabControlsWidget(QWidget):
     def set_active_import_file(self, file_path: str) -> None:
         """Called by FileNavigator when user selects a dispersion file."""
         self.combo_disp_mode.setCurrentIndex(1)  # Switch to import mode
-        self.txt_import_path.setText(file_path)
+        self.active_import_file = file_path
+        if self.file_nav is not None:
+            self.file_nav.active_file_path = file_path
+            if hasattr(self.file_nav, "txt_import_path") and self.file_nav.txt_import_path is not None:
+                self.file_nav.txt_import_path.setText(file_path)
+        elif self.txt_import_path is not None:
+            self.txt_import_path.setText(file_path)
 
     def _on_disp_mode_changed(self, index: int) -> None:
-        is_manual = (index == 0)
-        self._set_manual_betas_visible(is_manual)
-        self._set_import_path_visible(not is_manual)
-
-    def _set_manual_betas_visible(self, visible: bool) -> None:
-        self.txt_beta2.setVisible(visible)
-        self.txt_beta3.setVisible(visible)
-        self.txt_beta4.setVisible(visible)
-        self.txt_beta5.setVisible(visible)
-        self.txt_beta6.setVisible(visible)
-        self.txt_beta7.setVisible(visible)
-
-    def _set_import_path_visible(self, visible: bool) -> None:
-        self.txt_import_path.setVisible(visible)
-        self.btn_browse_disp.setVisible(visible)
-
-    def _on_browse_file(self) -> None:
-        fpath, _ = QFileDialog.getOpenFileName(self, "Select Dispersion File", "", "Dispersion Files (*.h5 *.hdf5 *.csv)")
-        if fpath:
-            self.txt_import_path.setText(fpath)
+        self.dispersion_mode_changed.emit(index)
 
     def _on_sim_type_changed(self, index: int) -> None:
         is_power = (index == 1)
@@ -297,20 +310,21 @@ class TabControlsWidget(QWidget):
             # Hult 2007 Benchmark
             self.txt_fwhm.setText("50.0")
             self.txt_peak_power.setText("10.0")
-            self.txt_wavelength.setText("835.0")
+            self.txt_wavelength.setText("850.0")
             self.txt_chirp.setText("0.0")
-            self.txt_length.setText("15.0")
-            self.txt_gamma.setText("110.0")
+            self.txt_length.setText("10.0")
+            self.txt_gamma.setText("45.0")
             self.txt_loss.setText("0.0")
             self.chk_raman.setChecked(True)
             self.chk_shock.setChecked(True)
             self.combo_disp_mode.setCurrentIndex(0)
-            self.txt_beta2.setText("-11.83")
-            self.txt_beta3.setText("0.081")
-            self.txt_beta4.setText("-0.000116")
-            self.txt_beta5.setText("0.00000259")
-            self.txt_beta6.setText("0.0000000538")
-            self.txt_beta7.setText("0.0")
+            if self.manual_disp:
+                self.manual_disp.txt_beta2.setText("-1.276")
+                self.manual_disp.txt_beta3.setText("8.119")
+                self.manual_disp.txt_beta4.setText("-1.321")
+                self.manual_disp.txt_beta5.setText("3.032")
+                self.manual_disp.txt_beta6.setText("-4.196")
+                self.manual_disp.txt_beta7.setText("2.570")
             self.combo_grid_n.setCurrentText("8192")
             self.txt_time_window.setText("12.5")
             self.combo_method.setCurrentText("RK4IP")
@@ -326,12 +340,12 @@ class TabControlsWidget(QWidget):
             self.chk_raman.setChecked(False)
             self.chk_shock.setChecked(False)
             self.combo_disp_mode.setCurrentIndex(0)
-            self.txt_beta2.setText("-21.4")
-            self.txt_beta3.setText("0.0")
-            self.txt_beta4.setText("0.0")
-            self.txt_beta5.setText("0.0")
-            self.txt_beta6.setText("0.0")
-            self.txt_beta7.setText("0.0")
+            if self.manual_disp: self.manual_disp.txt_beta2.setText("-2.14")
+            if self.manual_disp: self.manual_disp.txt_beta3.setText("0.0")
+            if self.manual_disp: self.manual_disp.txt_beta4.setText("0.0")
+            if self.manual_disp: self.manual_disp.txt_beta5.setText("0.0")
+            if self.manual_disp: self.manual_disp.txt_beta6.setText("0.0")
+            if self.manual_disp: self.manual_disp.txt_beta7.setText("0.0")
             self.combo_grid_n.setCurrentText("1024")
             self.txt_time_window.setText("20.0")
             self.combo_method.setCurrentText("RK4IP")
@@ -348,12 +362,12 @@ class TabControlsWidget(QWidget):
             self.chk_raman.setChecked(False)
             self.chk_shock.setChecked(False)
             self.combo_disp_mode.setCurrentIndex(0)
-            self.txt_beta2.setText("-21.4")
-            self.txt_beta3.setText("0.0")
-            self.txt_beta4.setText("0.0")
-            self.txt_beta5.setText("0.0")
-            self.txt_beta6.setText("0.0")
-            self.txt_beta7.setText("0.0")
+            if self.manual_disp: self.manual_disp.txt_beta2.setText("-2.14")
+            if self.manual_disp: self.manual_disp.txt_beta3.setText("0.0")
+            if self.manual_disp: self.manual_disp.txt_beta4.setText("0.0")
+            if self.manual_disp: self.manual_disp.txt_beta5.setText("0.0")
+            if self.manual_disp: self.manual_disp.txt_beta6.setText("0.0")
+            if self.manual_disp: self.manual_disp.txt_beta7.setText("0.0")
             self.combo_grid_n.setCurrentText("2048")
             self.txt_time_window.setText("100.0")
             self.combo_method.setCurrentText("RK4IP")
@@ -403,8 +417,18 @@ class TabControlsWidget(QWidget):
             return
 
         try:
-            grid_n = int(self.combo_grid_n.currentText())
+            g_text = self.combo_grid_n.currentText()
             t_max = float(self.txt_time_window.text()) * 1e-12
+            if g_text == "Auto":
+                from src.solver.config import compute_auto_grid_size
+                fwhm_fs = float(self.txt_fwhm.text())
+                is_gauss = "Gaussian" in self.combo_pulse_shape.currentText()
+                import math
+                div = 2.0 * math.sqrt(math.log(2.0)) if is_gauss else 2.0 * math.log(1.0 + math.sqrt(2.0))
+                t0_s = (fwhm_fs * 1e-15) / div
+                grid_n = compute_auto_grid_size(t_max, t0_s, self.chk_raman.isChecked())
+            else:
+                grid_n = int(g_text)
             solver_tmp = SolverConfig(n_points=grid_n, time_window=t_max)
             ok, msg = solver_tmp.check_raman_sampling()
             if not ok:
@@ -417,65 +441,91 @@ class TabControlsWidget(QWidget):
 
     def _on_run_clicked(self) -> None:
         """Parse inputs into strongly typed configs and request run."""
-        pulse_shape = "sech" if "Sech" in self.combo_pulse_shape.currentText() else "gaussian"
-        t_fwhm = float(self.txt_fwhm.text()) * 1e-15
-        p_peak = float(self.txt_peak_power.text()) * 1e3
-        wl0 = float(self.txt_wavelength.text()) * 1e-9
-        chirp = float(self.txt_chirp.text())
+        try:
+            pulse_shape = "sech" if "Sech" in self.combo_pulse_shape.currentText() else "gaussian"
+            t_fwhm = float(self.txt_fwhm.text()) * 1e-15
+            p_peak = float(self.txt_peak_power.text()) * 1e3
+            wl0 = float(self.txt_wavelength.text()) * 1e-9
+            chirp = float(self.txt_chirp.text())
 
-        pulse = PulseConfig(shape=pulse_shape, t_fwhm=t_fwhm, p_peak=p_peak, center_wavelength=wl0, chirp=chirp)
+            pulse = PulseConfig(shape=pulse_shape, t_fwhm=t_fwhm, p_peak=p_peak, center_wavelength=wl0, chirp=chirp)
 
-        length_m = float(self.txt_length.text()) * 1e-2  # cm to m
-        gamma_si = float(self.txt_gamma.text()) * 1e-3   # W^-1 km^-1 to W^-1 m^-1
-        loss_db = float(self.txt_loss.text())
+            length_m = float(self.txt_length.text()) * 1e-2  # cm to m
+            gamma_si = float(self.txt_gamma.text()) * 1e-3   # W^-1 km^-1 to W^-1 m^-1
+            loss_db = float(self.txt_loss.text())
 
-        # Dispersion config
-        if self.combo_disp_mode.currentIndex() == 0:
-            betas = [
-                ps2_km_to_si(float(self.txt_beta2.text())),
-                ps3_km_to_si(float(self.txt_beta3.text())),
-                psk_km_to_si(float(self.txt_beta4.text()), 4),
-                psk_km_to_si(float(self.txt_beta5.text()), 5),
-                psk_km_to_si(float(self.txt_beta6.text()), 6),
-                psk_km_to_si(float(self.txt_beta7.text()), 7),
-            ]
-            disp = DispersionConfig(mode="manual", betas=betas)
-        else:
-            disp = DispersionConfig(mode="import", import_path=self.txt_import_path.text())
+            # Dispersion config
+            if self.combo_disp_mode.currentIndex() == 0:
+                betas = self.manual_disp.get_betas_si() if self.manual_disp else [0.0]*6
+                disp = DispersionConfig(mode="manual", betas=betas)
+            else:
+                import_path = ""
+                if self.file_nav and hasattr(self.file_nav, 'active_file_path') and self.file_nav.active_file_path:
+                    import_path = self.file_nav.active_file_path
+                elif getattr(self, "active_import_file", None):
+                    import_path = self.active_import_file
 
-        raman_fr = 0.18 if self.chk_raman.isChecked() else 0.0
-        fiber = FiberConfig(
-            length=length_m,
-            gamma=gamma_si,
-            loss_alpha_db=loss_db,
-            dispersion=disp,
-            raman_fr=raman_fr,
-        )
+                if not import_path or not os.path.exists(import_path):
+                    QMessageBox.warning(
+                        self,
+                        "Missing Dispersion File",
+                        "Please select a valid dispersion file (.h5 / .csv) before running in import mode.",
+                    )
+                    return
 
-        sim_type = "spectrum_vs_power" if self.combo_sim_type.currentIndex() == 1 else "spectrum_vs_distance"
-        method = self.combo_method.currentText()
-        grid_n = int(self.combo_grid_n.currentText())
-        t_max = float(self.txt_time_window.text()) * 1e-12
-        adaptive = self.chk_adaptive.isChecked()
-        h_init = float(self.txt_init_step.text()) * 1e-3  # mm to m
-        tol = float(self.txt_tolerance.text())
+                h5_group = self.file_nav.combo_group.currentText() if hasattr(self.file_nav, 'combo_group') else None
+                h5_dataset_x = self.file_nav.combo_x.currentText() if hasattr(self.file_nav, 'combo_x') else None
+                h5_dataset_y = self.file_nav.combo_y.currentText() if hasattr(self.file_nav, 'combo_y') else None
+                disp = DispersionConfig(mode="import", import_path=import_path,
+                                        h5_group=h5_group, h5_dataset_x=h5_dataset_x, h5_dataset_y=h5_dataset_y)
 
-        # Bound intermediate record frames to 400 to prevent multi-GB memory exhaustion
-        z_records = 400 if sim_type == "spectrum_vs_distance" else None
+            raman_fr = 0.18 if self.chk_raman.isChecked() else 0.0
+            fiber = FiberConfig(
+                length=length_m,
+                gamma=gamma_si,
+                loss_alpha_db=loss_db,
+                dispersion=disp,
+                raman_fr=raman_fr,
+            )
 
-        solver = SolverConfig(
-            simulation_type=sim_type,
-            method=method,
-            n_points=grid_n,
-            time_window=t_max,
-            adaptive_step=adaptive,
-            initial_step=h_init,
-            tolerance=tol,
-            z_records=z_records,
-            power_min=float(self.txt_power_min.text()) * 1e3,
-            power_max=float(self.txt_power_max.text()) * 1e3,
-            power_steps=int(self.txt_power_steps.text()),
-        )
+            sim_type = "spectrum_vs_power" if self.combo_sim_type.currentIndex() == 1 else "spectrum_vs_distance"
+            method = self.combo_method.currentText()
+            g_text = self.combo_grid_n.currentText()
+            t_max = float(self.txt_time_window.text()) * 1e-12
+            if g_text == "Auto":
+                from src.solver.config import compute_auto_grid_size
+                fwhm_fs = float(self.txt_fwhm.text())
+                is_gauss = "Gaussian" in self.combo_pulse_shape.currentText()
+                div = 2.0 * math.sqrt(math.log(2.0)) if is_gauss else 2.0 * math.log(1.0 + math.sqrt(2.0))
+                t0_s = (fwhm_fs * 1e-15) / div
+                grid_n = compute_auto_grid_size(t_max, t0_s, self.chk_raman.isChecked())
+            else:
+                grid_n = int(g_text)
+            adaptive = self.chk_adaptive.isChecked()
+            h_init = float(self.txt_init_step.text()) * 1e-3  # mm to m
+            tol = float(self.txt_tolerance.text())
+
+            # Bound intermediate record frames to 400 to prevent multi-GB memory exhaustion
+            z_records = 400 if sim_type == "spectrum_vs_distance" else None
+
+            solver = SolverConfig(
+                simulation_type=sim_type,
+                method=method,
+                n_points=grid_n,
+                time_window=t_max,
+                adaptive_step=adaptive,
+                initial_step=h_init,
+                tolerance=tol,
+                z_records=z_records,
+                power_min=float(self.txt_power_min.text()) * 1e3,
+                power_max=float(self.txt_power_max.text()) * 1e3,
+                power_steps=int(self.txt_power_steps.text()),
+                raman_enabled=self.chk_raman.isChecked(),
+                shock_enabled=self.chk_shock.isChecked(),
+            )
+        except ValueError as e:
+            QMessageBox.warning(self, "Invalid Parameter", f"Please check input values:\n{e}")
+            return
 
         display_live = self.chk_display_live.isChecked()
         self.btn_run.setEnabled(False)
@@ -491,3 +541,187 @@ class TabControlsWidget(QWidget):
         self._is_paused = False
         self.btn_pause.setText("❚❚ Pause")
         self.btn_pause.setStyleSheet("background-color: #FFA000; color: white; font-weight: bold;")
+
+
+    @property
+    def txt_beta2(self): return self.manual_disp.txt_beta2 if self.manual_disp else None
+    @property
+    def txt_beta3(self): return self.manual_disp.txt_beta3 if self.manual_disp else None
+    @property
+    def txt_beta4(self): return self.manual_disp.txt_beta4 if self.manual_disp else None
+    @property
+    def txt_beta5(self): return self.manual_disp.txt_beta5 if self.manual_disp else None
+    @property
+    def txt_beta6(self): return self.manual_disp.txt_beta6 if self.manual_disp else None
+    @property
+    def txt_beta7(self): return self.manual_disp.txt_beta7 if self.manual_disp else None
+    @property
+    def txt_import_path(self): return self.file_nav.txt_import_path if self.file_nav else None
+
+    def set_external_widgets(self, manual_disp, file_nav):
+        self.manual_disp = manual_disp
+        self.file_nav = file_nav
+
+    def _on_export_config(self) -> None:
+        import json
+        fpath, _ = QFileDialog.getSaveFileName(self, "Export Configuration", "", "JSON Files (*.json)")
+        if not fpath:
+            return
+
+        try:
+            pulse_shape = "sech" if "Sech" in self.combo_pulse_shape.currentText() else "gaussian"
+            p = PulseConfig(
+                shape=pulse_shape,
+                t_fwhm=float(self.txt_fwhm.text()) * 1e-15,
+                p_peak=float(self.txt_peak_power.text()) * 1e3,
+                center_wavelength=float(self.txt_wavelength.text()) * 1e-9,
+                chirp=float(self.txt_chirp.text()),
+            )
+
+            if self.combo_disp_mode.currentIndex() == 0:
+                betas = self.manual_disp.get_betas_si() if self.manual_disp else [0.0] * 6
+                disp = DispersionConfig(mode="manual", betas=betas)
+            else:
+                import_path = ""
+                if self.file_nav and hasattr(self.file_nav, 'active_file_path') and self.file_nav.active_file_path:
+                    import_path = self.file_nav.active_file_path
+                elif getattr(self, "active_import_file", None):
+                    import_path = self.active_import_file
+
+                h5_group = self.file_nav.combo_group.currentText() if hasattr(self.file_nav, 'combo_group') else None
+                h5_dataset_x = self.file_nav.combo_x.currentText() if hasattr(self.file_nav, 'combo_x') else None
+                h5_dataset_y = self.file_nav.combo_y.currentText() if hasattr(self.file_nav, 'combo_y') else None
+                disp = DispersionConfig(
+                    mode="import",
+                    import_path=import_path,
+                    h5_group=h5_group,
+                    h5_dataset_x=h5_dataset_x,
+                    h5_dataset_y=h5_dataset_y,
+                )
+
+            f = FiberConfig(
+                length=float(self.txt_length.text()) * 1e-2,
+                gamma=float(self.txt_gamma.text()) * 1e-3,
+                loss_alpha_db=float(self.txt_loss.text()),
+                dispersion=disp,
+                raman_fr=0.18 if self.chk_raman.isChecked() else 0.0,
+            )
+
+            g_text = self.combo_grid_n.currentText()
+            t_max = float(self.txt_time_window.text()) * 1e-12
+            if g_text == "Auto":
+                from src.solver.config import compute_auto_grid_size
+                fwhm_fs = float(self.txt_fwhm.text())
+                is_gauss = "Gaussian" in self.combo_pulse_shape.currentText()
+                div = 2.0 * math.sqrt(math.log(2.0)) if is_gauss else 2.0 * math.log(1.0 + math.sqrt(2.0))
+                t0_s = (fwhm_fs * 1e-15) / div
+                grid_n = compute_auto_grid_size(t_max, t0_s, self.chk_raman.isChecked())
+            else:
+                grid_n = int(g_text)
+
+            s = SolverConfig(
+                simulation_type="spectrum_vs_power" if self.combo_sim_type.currentIndex() == 1 else "spectrum_vs_distance",
+                method=self.combo_method.currentText(),
+                n_points=grid_n,
+                time_window=t_max,
+                adaptive_step=self.chk_adaptive.isChecked(),
+                initial_step=float(self.txt_init_step.text()) * 1e-3,
+                tolerance=float(self.txt_tolerance.text()),
+                power_min=float(self.txt_power_min.text()) * 1e3,
+                power_max=float(self.txt_power_max.text()) * 1e3,
+                power_steps=int(self.txt_power_steps.text()),
+                raman_enabled=self.chk_raman.isChecked(),
+                shock_enabled=self.chk_shock.isChecked(),
+            )
+
+            data = {
+                "pulse": p.to_dict(),
+                "fiber": f.to_dict(),
+                "solver": s.to_dict(),
+            }
+            with open(fpath, "w") as out:
+                json.dump(data, out, indent=4)
+        except ValueError as e:
+            QMessageBox.warning(self, "Invalid Parameter", f"Please check input values:\n{e}")
+            return
+
+    def _on_import_config(self) -> None:
+        import json
+        fpath, _ = QFileDialog.getOpenFileName(self, "Import Configuration", "", "JSON Files (*.json)")
+        if fpath:
+            try:
+                with open(fpath, "r") as inf:
+                    data = json.load(inf)
+                if "pulse" in data:
+                    p = PulseConfig.from_dict(data["pulse"])
+                    self.txt_fwhm.setText(str(p.t_fwhm * 1e15))
+                    self.txt_peak_power.setText(str(p.p_peak * 1e-3))
+                    self.txt_wavelength.setText(str(p.center_wavelength * 1e9))
+                    self.txt_chirp.setText(str(p.chirp))
+                    if p.shape == "sech":
+                        self.combo_pulse_shape.setCurrentIndex(0)
+                    elif p.shape == "gaussian":
+                        self.combo_pulse_shape.setCurrentIndex(1)
+
+                if "fiber" in data:
+                    f = FiberConfig.from_dict(data["fiber"])
+                    self.txt_length.setText(str(f.length * 1e2))
+                    self.txt_gamma.setText(str(f.gamma * 1e3))
+                    self.txt_loss.setText(str(f.loss_alpha_db))
+                    self.chk_raman.setChecked(f.raman_fr > 0)
+
+                    if hasattr(f, 'dispersion') and type(f.dispersion) is dict:
+                        d = DispersionConfig.from_dict(f.dispersion)
+                    else:
+                        d = f.dispersion
+
+                    if d.mode == "manual":
+                        self.combo_disp_mode.setCurrentIndex(0)
+                        if self.manual_disp and d.betas:
+                            exp_map = {2: -2, 3: -5, 4: -7, 5: -10, 6: -13, 7: -16}
+                            beta_widgets = {
+                                2: self.manual_disp.txt_beta2,
+                                3: self.manual_disp.txt_beta3,
+                                4: self.manual_disp.txt_beta4,
+                                5: self.manual_disp.txt_beta5,
+                                6: self.manual_disp.txt_beta6,
+                                7: self.manual_disp.txt_beta7,
+                            }
+                            for k in range(2, 8):
+                                if k - 2 < len(d.betas):
+                                    beta_si = d.betas[k - 2]
+                                    exponent = exp_map[k]
+                                    mantissa = round(DispersionConfig.si_to_ps_m(k, beta_si) / (10 ** exponent), 6)
+                                    beta_widgets[k].setText(f"{mantissa:g}")
+                    else:
+                        self.combo_disp_mode.setCurrentIndex(1)
+                        if d.import_path:
+                            self.set_active_import_file(d.import_path)
+
+                if "solver" in data:
+                    s = SolverConfig.from_dict(data["solver"])
+                    if s.simulation_type == "spectrum_vs_power":
+                        self.combo_sim_type.setCurrentIndex(1)
+                    else:
+                        self.combo_sim_type.setCurrentIndex(0)
+                    if s.method in ["RK4IP", "S-SSFM", "SSFM"]:
+                        self.combo_method.setCurrentText(s.method)
+                    self.chk_adaptive.setChecked(bool(s.adaptive_step))
+                    if s.power_min is not None:
+                        self.txt_power_min.setText(str(s.power_min * 1e-3))
+                    if s.power_max is not None:
+                        self.txt_power_max.setText(str(s.power_max * 1e-3))
+                    if s.power_steps is not None:
+                        self.txt_power_steps.setText(str(s.power_steps))
+                    self.combo_grid_n.setCurrentText(str(s.n_points))
+                    self.txt_time_window.setText(str(s.time_window * 1e12))
+                    self.txt_init_step.setText(str(s.initial_step * 1e3))
+                    self.txt_tolerance.setText(str(s.tolerance))
+                    if hasattr(s, 'raman_enabled'):
+                        self.chk_raman.setChecked(bool(s.raman_enabled))
+                    if hasattr(s, 'shock_enabled'):
+                        self.chk_shock.setChecked(bool(s.shock_enabled))
+
+                self.combo_presets.setCurrentIndex(3)
+            except Exception as e:
+                QMessageBox.critical(self, "Configuration Import Error", f"Failed to import configuration:\n{e}")

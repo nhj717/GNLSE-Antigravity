@@ -76,7 +76,7 @@ def compute_dispersion_operator(
         if not path.is_file():
             raise FileNotFoundError(f"Dispersion import file not found: {path}")
 
-        omega_data, beta_data = _load_dispersion_file(path)
+        omega_data, beta_data = _load_dispersion_file(path, dispersion)
 
         # Build cubic spline
         spline = CubicSpline(omega_data, beta_data)
@@ -96,7 +96,7 @@ def compute_dispersion_operator(
         raise ValueError(f"Unknown dispersion mode: {dispersion.mode}")
 
 
-def _load_dispersion_file(path: Path) -> tuple[np.ndarray, np.ndarray]:
+def _load_dispersion_file(path: Path, dispersion=None) -> tuple[np.ndarray, np.ndarray]:
     """Load dispersion curve from CSV or HDF5."""
     suffix = path.suffix.lower()
     if suffix in (".csv", ".txt", ".dat"):
@@ -120,24 +120,29 @@ def _load_dispersion_file(path: Path) -> tuple[np.ndarray, np.ndarray]:
     elif suffix in (".h5", ".hdf5"):
         import h5py
         with h5py.File(path, "r") as f:
-            if "omega" in f and "beta" in f:
-                x = np.asarray(f["omega"])
-                y = np.asarray(f["beta"])
-            elif "wavelength" in f and "beta" in f:
-                x = np.asarray(f["wavelength"])
-                y = np.asarray(f["beta"])
-            elif "data" in f:
-                d = np.asarray(f["data"])
-                x = d[:, 0]
-                y = d[:, 1]
+            if dispersion and dispersion.h5_group and dispersion.h5_dataset_x and dispersion.h5_dataset_y:
+                g = dispersion.h5_group
+                group = f if g == "/" else f[g.rstrip("/")]
+                x = np.asarray(group[dispersion.h5_dataset_x])
+                y = np.asarray(group[dispersion.h5_dataset_y])
             else:
-                # pick first two datasets
-                keys = list(f.keys())
-                if len(keys) >= 2:
-                    x = np.asarray(f[keys[0]])
-                    y = np.asarray(f[keys[1]])
+                if "omega" in f and "beta" in f:
+                    x = np.asarray(f["omega"])
+                    y = np.asarray(f["beta"])
+                elif "wavelength" in f and "beta" in f:
+                    x = np.asarray(f["wavelength"])
+                    y = np.asarray(f["beta"])
+                elif "data" in f:
+                    d = np.asarray(f["data"])
+                    x = d[:, 0]
+                    y = d[:, 1]
                 else:
-                    raise ValueError(f"HDF5 file must contain at least 2 datasets, found: {keys}")
+                    keys = list(f.keys())
+                    if len(keys) >= 2:
+                        x = np.asarray(f[keys[0]])
+                        y = np.asarray(f[keys[1]])
+                    else:
+                        raise ValueError(f"HDF5 file must contain at least 2 datasets, found: {keys}")
     else:
         raise ValueError(f"Unsupported file format: {suffix}. Must be .csv or .h5")
 

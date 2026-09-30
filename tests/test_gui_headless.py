@@ -45,13 +45,13 @@ def test_scientific_unit_labels_integrity(qtbot):
     controls = window.tab_controls
 
     # Collect all QLabel texts in controls
-    all_labels = [lbl.text() for lbl in controls.findChildren(QLabel)]
+    all_labels = [lbl.text() for lbl in controls.findChildren(QLabel)] + [lbl.text() for lbl in window.manual_disp.findChildren(QLabel)]
     all_text = " ".join(all_labels)
 
     # Verify bracketed units specified in Blueprint Section 9.1
     required_units = [
         "[fs]", "[kW]", "[nm]", "[-]", "[cm]", "[W⁻¹·km⁻¹]", "[dB/km]",
-        "[ps²/km]", "[ps³/km]", "[ps⁴/km]", "[ps⁵/km]", "[ps⁶/km]", "[ps⁷/km]",
+        "[ps² m⁻¹] × 10⁻²", "[ps³ m⁻¹] × 10⁻⁵", "[ps⁴ m⁻¹] × 10⁻⁷", "[ps⁵ m⁻¹] × 10⁻¹⁰", "[ps⁶ m⁻¹] × 10⁻¹³", "[ps⁷ m⁻¹] × 10⁻¹⁶",
         "[points]", "[ps]", "[mm]"
     ]
     for unit in required_units:
@@ -100,20 +100,27 @@ def test_preset_loading(qtbot):
     qtbot.addWidget(window)
     controls = window.tab_controls
 
-    # 1. Select Johan Hult 2007 preset
+    # 1. Switch to index 1 (Soliton N=1)
+    controls.combo_presets.setCurrentIndex(1)
+    assert float(controls.txt_wavelength.text()) == 1550.0
+    assert float(controls.txt_beta2.text()) == -2.14
+    assert controls.chk_raman.isChecked() is False
+
+    # 2. Switch to index 0 (Johan Hult 2007)
     controls.combo_presets.setCurrentIndex(0)
-    assert float(controls.txt_wavelength.text()) == 835.0
-    assert float(controls.txt_beta2.text()) == -11.83
+    assert float(controls.txt_wavelength.text()) == 850.0
+    assert float(controls.txt_length.text()) == 10.0
+    assert float(controls.txt_gamma.text()) == 45.0
+    assert float(controls.txt_beta2.text()) == -1.276
+    assert float(controls.txt_beta3.text()) == 8.119
+    assert float(controls.txt_beta4.text()) == -1.321
+    assert float(controls.txt_beta5.text()) == 3.032
+    assert float(controls.txt_beta6.text()) == -4.196
+    assert float(controls.txt_beta7.text()) == 2.570
     assert float(controls.txt_fwhm.text()) == 50.0
     assert controls.chk_raman.isChecked() is True
 
-    # 2. Select Soliton N=1 preset
-    controls.combo_presets.setCurrentIndex(1)
-    assert float(controls.txt_wavelength.text()) == 1550.0
-    assert float(controls.txt_beta2.text()) == -21.4
-    assert controls.chk_raman.isChecked() is False
-
-    # 3. Select Telecom preset
+    # 3. Switch to index 2 (Telecom)
     controls.combo_presets.setCurrentIndex(2)
     assert float(controls.txt_wavelength.text()) == 1550.0
     assert float(controls.txt_fwhm.text()) == 10000.0
@@ -328,3 +335,165 @@ def test_tab3_diagnostics_and_logging(qtbot):
     assert "250.0 steps/s" in tab_log.lbl_calc_speed.text()
     assert "3.5 s" in tab_log.lbl_eta.text()
     assert "GNLSE Diagnostic Logger initialized" in tab_log.console.toPlainText()
+
+
+def test_file_navigator_use_file_selection(qtbot, tmp_path):
+    """Verify file_navigator.file_selected works without crashing (_on_use_file)."""
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    csv_path = tmp_path / "test_disp.csv"
+    with open(csv_path, "w", encoding="utf-8") as f:
+        f.write("wavelength_nm,D_ps_nm_km\n800.0,-20.0\n1000.0,0.0\n1200.0,15.0\n")
+
+    window.file_navigator.active_file_path = str(csv_path)
+    window.file_navigator.btn_use_dispersion.setEnabled(True)
+    window.file_navigator._on_use_file()
+
+    assert window.tab_controls.combo_disp_mode.currentIndex() == 1
+    assert window.tab_controls.active_import_file == str(csv_path)
+    assert window.file_navigator.txt_import_path.text() == str(csv_path)
+
+    # Calling set_active_import_file directly also works without crash
+    window.tab_controls.set_active_import_file(str(csv_path))
+    assert window.file_navigator.txt_import_path.text() == str(csv_path)
+
+
+def test_config_export_import_roundtrip(qtbot, tmp_path, monkeypatch):
+    """Verify config export and import round-trip accurately restores beta values and solver settings."""
+    window = MainWindow()
+    qtbot.addWidget(window)
+    controls = window.tab_controls
+    manual_disp = window.manual_disp
+
+    # Configure specific manual beta values and solver parameters
+    manual_disp.txt_beta2.setText("-1.276")
+    manual_disp.txt_beta3.setText("8.119")
+    manual_disp.txt_beta4.setText("-1.321")
+    manual_disp.txt_beta5.setText("3.032")
+    manual_disp.txt_beta6.setText("-4.196")
+    manual_disp.txt_beta7.setText("2.570")
+
+    controls.combo_sim_type.setCurrentIndex(1)  # Spectrum vs Power
+    controls.combo_method.setCurrentText("S-SSFM")
+    controls.chk_adaptive.setChecked(False)
+    controls.txt_power_min.setText("0.5")
+    controls.txt_power_max.setText("12.0")
+    controls.txt_power_steps.setText("60")
+    controls.combo_grid_n.setCurrentText("4096")
+    controls.txt_time_window.setText("15.0")
+    controls.txt_init_step.setText("0.05")
+    controls.txt_tolerance.setText("2e-5")
+
+    # Export to json file
+    export_file = str(tmp_path / "config_roundtrip.json")
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args, **kwargs: (export_file, "JSON Files (*.json)"))
+    controls._on_export_config()
+    assert os.path.exists(export_file)
+
+    # Change settings to something different
+    manual_disp.txt_beta2.setText("0.0")
+    manual_disp.txt_beta3.setText("0.0")
+    manual_disp.txt_beta4.setText("0.0")
+    manual_disp.txt_beta5.setText("0.0")
+    manual_disp.txt_beta6.setText("0.0")
+    manual_disp.txt_beta7.setText("0.0")
+    controls.combo_sim_type.setCurrentIndex(0)
+    controls.combo_method.setCurrentText("RK4IP")
+    controls.chk_adaptive.setChecked(True)
+    controls.combo_grid_n.setCurrentText("1024")
+
+    # Import back from the file
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args, **kwargs: (export_file, "JSON Files (*.json)"))
+    controls._on_import_config()
+
+    # Verify beta values restored accurately
+    assert float(manual_disp.txt_beta2.text()) == pytest.approx(-1.276)
+    assert float(manual_disp.txt_beta3.text()) == pytest.approx(8.119)
+    assert float(manual_disp.txt_beta4.text()) == pytest.approx(-1.321)
+    assert float(manual_disp.txt_beta5.text()) == pytest.approx(3.032)
+    assert float(manual_disp.txt_beta6.text()) == pytest.approx(-4.196)
+    assert float(manual_disp.txt_beta7.text()) == pytest.approx(2.570)
+
+    # Verify solver settings restored accurately
+    assert controls.combo_sim_type.currentIndex() == 1
+    assert controls.combo_method.currentText() == "S-SSFM"
+    assert controls.chk_adaptive.isChecked() is False
+    assert float(controls.txt_power_min.text()) == pytest.approx(0.5)
+    assert float(controls.txt_power_max.text()) == pytest.approx(12.0)
+    assert int(controls.txt_power_steps.text()) == 60
+    assert controls.combo_grid_n.currentText() == "4096"
+    assert float(controls.txt_time_window.text()) == pytest.approx(15.0)
+    assert float(controls.txt_init_step.text()) == pytest.approx(0.05)
+    assert float(controls.txt_tolerance.text()) == pytest.approx(2e-5)
+
+
+def test_auto_grid_combobox_preservation(qtbot):
+    """Verify selecting 'Auto' grid is preserved during simulation run and exported correctly."""
+    from src.gui.tab_controls import TabControlsWidget
+    controls = TabControlsWidget()
+    qtbot.addWidget(controls)
+
+    controls.combo_grid_n.setCurrentText("Auto")
+    assert controls.combo_grid_n.currentText() == "Auto"
+
+    recorded = []
+    controls.run_requested.connect(lambda p, f, s, d: recorded.append(s))
+    controls._on_run_clicked()
+
+    # Combobox must remain "Auto"
+    assert controls.combo_grid_n.currentText() == "Auto"
+    assert len(recorded) == 1
+    # SolverConfig received a positive power-of-2 integer
+    assert recorded[0].n_points >= 1024
+    assert (recorded[0].n_points & (recorded[0].n_points - 1)) == 0
+
+
+def test_defensive_parameter_input_handling(qtbot, monkeypatch):
+    """Verify invalid inputs trigger warning dialog and do not crash."""
+    from src.gui.tab_controls import TabControlsWidget
+    controls = TabControlsWidget()
+    qtbot.addWidget(controls)
+
+    warnings = []
+    from PyQt6.QtWidgets import QMessageBox
+    monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, msg: warnings.append((title, msg)))
+
+    # Set invalid non-numeric text in FWHM
+    controls.txt_fwhm.setText("invalid_number")
+    controls._on_run_clicked()
+
+    assert len(warnings) == 1
+    assert "Invalid Parameter" in warnings[0][0]
+
+    # Test missing dispersion file warning in import mode
+    controls.txt_fwhm.setText("50.0")
+    controls.combo_disp_mode.setCurrentIndex(1)
+    controls._on_run_clicked()
+
+    assert len(warnings) == 2
+    assert "Missing Dispersion File" in warnings[1][0]
+
+
+def test_mainwindow_simulation_initialization_error(qtbot, monkeypatch):
+    """Verify MainWindow handles initial solver generator failure gracefully."""
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    errors = []
+    from PyQt6.QtWidgets import QMessageBox
+    monkeypatch.setattr(QMessageBox, "critical", lambda parent, title, msg: errors.append((title, msg)))
+
+    # Intentionally pass an invalid configuration that raises in solve_generator
+    from src.gui import main_window
+    def broken_generator(*args, **kwargs):
+        raise RuntimeError("Simulated solver generator failure")
+
+    monkeypatch.setattr(main_window, "solve_generator", broken_generator)
+
+    window.tab_controls._on_run_clicked()
+
+    assert len(errors) == 1
+    assert "Simulation Initialization Error" in errors[0][0]
+    assert "Status: Error" in window.lbl_status.text()
+    assert window.tab_controls.btn_run.isEnabled() is True

@@ -13,6 +13,7 @@ import time
 from typing import Optional, List
 from PyQt6.QtCore import Qt, QThread, pyqtSlot
 from PyQt6.QtWidgets import (
+    QStackedWidget,
     QMainWindow, QTabWidget, QWidget, QHBoxLayout, QSplitter,
     QProgressBar, QLabel, QStatusBar, QMessageBox
 )
@@ -20,7 +21,7 @@ from PyQt6.QtWidgets import (
 from src.solver.config import FiberConfig, PulseConfig, SolverConfig, SimulationState
 from src.solver.engine import solve_generator
 from src.bridge.worker import SolverWorker
-from .tab_controls import TabControlsWidget
+from .tab_controls import TabControlsWidget, ManualDispersionWidget
 from .tab_results import TabResultsWidget
 from .tab_logging import TabLoggingWidget
 from .file_navigator import FileNavigatorWidget
@@ -48,8 +49,16 @@ class MainWindow(QMainWindow):
         tab1_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.tab_controls = TabControlsWidget()
         self.file_navigator = FileNavigatorWidget()
+        self.manual_disp = ManualDispersionWidget()
+        
+        self.tab_controls.set_external_widgets(self.manual_disp, self.file_navigator)
+        
+        self.disp_stack = QStackedWidget()
+        self.disp_stack.addWidget(self.manual_disp)
+        self.disp_stack.addWidget(self.file_navigator)
+        
         tab1_splitter.addWidget(self.tab_controls)
-        tab1_splitter.addWidget(self.file_navigator)
+        tab1_splitter.addWidget(self.disp_stack)
         tab1_splitter.setStretchFactor(0, 3)
         tab1_splitter.setStretchFactor(1, 2)
 
@@ -97,6 +106,7 @@ class MainWindow(QMainWindow):
 
         # Wire UI interactions
         self.file_navigator.file_selected.connect(self.tab_controls.set_active_import_file)
+        self.tab_controls.dispersion_mode_changed.connect(self.disp_stack.setCurrentIndex)
         self.tab_controls.simulation_type_changed.connect(self.tab_results.set_simulation_type)
         self.tab_controls.wavelength_changed.connect(self.tab_results.set_center_wavelength)
         self.tab_controls.run_requested.connect(self._start_simulation)
@@ -124,8 +134,15 @@ class MainWindow(QMainWindow):
         self._sim_start_time = time.perf_counter()
 
         # Generate initial state for 'before' plots
-        initial_gen = solve_generator(pulse, fiber, solver)
-        initial_state = next(initial_gen)
+        try:
+            initial_gen = solve_generator(pulse, fiber, solver)
+            initial_state = next(initial_gen)
+        except Exception as e:
+            self.tab_controls.set_running_state(False)
+            self.lbl_status.setText("Status: Error ⚠️")
+            QMessageBox.critical(self, "Simulation Initialization Error", f"Could not initialize simulation:\n{e}")
+            return
+
         self.tab_results.prepare_for_simulation(
             initial_state, solver.method, center_wavelength=pulse.center_wavelength
         )

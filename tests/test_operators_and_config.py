@@ -142,3 +142,48 @@ def test_spectrum_vs_power_mode():
     assert pytest.approx(states[-1].power) == 10.0
     for s in states:
         assert s.z == 1.0
+
+
+def test_config_serialization_round_trip():
+    """Verify full round-trip serialization/deserialization of configs works with solve_generator."""
+    orig_pulse = PulseConfig(shape="sech", t_fwhm=1.0e-12, p_peak=50.0, center_wavelength=1550e-9)
+    orig_fiber = FiberConfig(
+        length=0.1,
+        gamma=2.5e-3,
+        dispersion=DispersionConfig.from_si(beta2=-20e-27, beta3=0.1e-39),
+        raman_fr=0.18,
+    )
+    orig_solver = SolverConfig(
+        n_points=512,
+        time_window=10e-12,
+        adaptive_step=False,
+        initial_step=0.05,
+        z_records=2,
+    )
+
+    # Test round trip to_dict -> from_dict
+    pulse_dict = orig_pulse.to_dict()
+    fiber_dict = orig_fiber.to_dict()
+    solver_dict = orig_solver.to_dict()
+
+    deserialized_pulse = PulseConfig.from_dict(pulse_dict)
+    deserialized_fiber = FiberConfig.from_dict(fiber_dict)
+    deserialized_solver = SolverConfig.from_dict(solver_dict)
+
+    # Verify nested types
+    assert isinstance(deserialized_fiber.dispersion, DispersionConfig)
+    assert deserialized_fiber.dispersion.beta2 == orig_fiber.dispersion.beta2
+    assert deserialized_fiber.dispersion.beta3 == orig_fiber.dispersion.beta3
+    assert deserialized_fiber.gamma == orig_fiber.gamma
+    assert deserialized_pulse.t_fwhm == orig_pulse.t_fwhm
+    assert deserialized_solver.n_points == orig_solver.n_points
+
+    # Verify default FiberConfig().to_dict() round trip works with solve_generator
+    default_fiber = FiberConfig.from_dict(FiberConfig().to_dict())
+    assert isinstance(default_fiber.dispersion, DispersionConfig)
+
+    # Verify execution in solve_generator with deserialized configs
+    states = list(solve_generator(deserialized_pulse, deserialized_fiber, deserialized_solver))
+    assert len(states) >= 2
+    assert pytest.approx(states[-1].z, abs=1e-6) == 0.1
+

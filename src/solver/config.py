@@ -34,6 +34,9 @@ class DispersionConfig:
     # betas: [beta2, beta3, beta4, beta5, beta6, beta7] in SI units [s^k / m]
     betas: list[float] = field(default_factory=lambda: [0.0] * 6)
     import_path: Optional[str] = None
+    h5_group: Optional[str] = None
+    h5_dataset_x: Optional[str] = None
+    h5_dataset_y: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.mode not in ("manual", "import"):
@@ -95,6 +98,16 @@ class DispersionConfig:
             raise ValueError(f"Dispersion order must be >= 1, got {order}")
         return float(val_ps_m * (10.0 ** (-12 * order)))
 
+    @staticmethod
+    def si_to_ps_m(order: int, val_si: float) -> float:
+        """Convert dispersion coefficient from SI unit s^k / m to ps^k / m.
+
+        Formula: 1 s^k / m = 10^(12*k) ps^k / m.
+        """
+        if order < 1:
+            raise ValueError(f"Dispersion order must be >= 1, got {order}")
+        return float(val_si * (10.0 ** (12 * order)))
+
     @classmethod
     def from_conventional_ps_km(
         cls,
@@ -131,6 +144,22 @@ class DispersionConfig:
     def from_import(cls, import_path: str) -> "DispersionConfig":
         """Instantiate DispersionConfig in import mode for a .csv or .h5 file."""
         return cls(mode="import", import_path=import_path)
+
+    def to_dict(self) -> dict:
+        import dataclasses
+        return dataclasses.asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "DispersionConfig":
+        import dataclasses
+        valid_keys = {f.name for f in dataclasses.fields(cls)}
+        filtered_data = {k: v for k, v in data.items() if k in valid_keys}
+        if "betas" in filtered_data and filtered_data["betas"] is not None:
+            filtered_data["betas"] = [float(b) for b in filtered_data["betas"]]
+        if "mode" in filtered_data and filtered_data["mode"] is not None:
+            filtered_data["mode"] = str(filtered_data["mode"])
+        return cls(**filtered_data)
+
 
 
 def ps2_km_to_si(val_ps2_km: float) -> float:
@@ -195,6 +224,29 @@ class PulseConfig:
     def omega_0(self) -> float:
         """Carrier angular frequency omega_0 [rad/s]."""
         return 2.0 * math.pi * C_CONST / self.center_wavelength
+
+    def to_dict(self) -> dict:
+        import dataclasses
+        return dataclasses.asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "PulseConfig":
+        import dataclasses
+        valid_keys = {f.name for f in dataclasses.fields(cls)}
+        filtered_data = {k: v for k, v in data.items() if k in valid_keys}
+        for float_field in ("t_fwhm", "p_peak", "center_wavelength", "chirp"):
+            if float_field in filtered_data and filtered_data[float_field] is not None:
+                filtered_data[float_field] = float(filtered_data[float_field])
+        if "shape" in filtered_data and filtered_data["shape"] is not None:
+            filtered_data["shape"] = str(filtered_data["shape"])
+        for arr_field in ("custom_field", "custom_time"):
+            if arr_field in filtered_data and filtered_data[arr_field] is not None:
+                if not isinstance(filtered_data[arr_field], np.ndarray):
+                    filtered_data[arr_field] = np.asarray(filtered_data[arr_field])
+        return cls(**filtered_data)
+
+
+
 
 
 @dataclass
@@ -262,6 +314,26 @@ class FiberConfig:
             raman_tau1=raman_tau1,
             raman_tau2=raman_tau2,
         )
+
+    def to_dict(self) -> dict:
+        import dataclasses
+        return dataclasses.asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "FiberConfig":
+        import dataclasses
+        valid_keys = {f.name for f in dataclasses.fields(cls)}
+        filtered_data = {k: v for k, v in data.items() if k in valid_keys}
+        if "dispersion" in filtered_data:
+            if isinstance(filtered_data["dispersion"], dict):
+                filtered_data["dispersion"] = DispersionConfig.from_dict(filtered_data["dispersion"])
+            elif filtered_data["dispersion"] is None:
+                filtered_data["dispersion"] = DispersionConfig()
+        for float_field in ("length", "gamma", "loss_alpha_db", "raman_fr", "raman_tau1", "raman_tau2"):
+            if float_field in filtered_data and filtered_data[float_field] is not None:
+                filtered_data[float_field] = float(filtered_data[float_field])
+        return cls(**filtered_data)
+
 
 
 @dataclass
@@ -339,6 +411,39 @@ class SolverConfig:
             )
         return True, "Temporal grid resolution OK"
 
+    def to_dict(self) -> dict:
+        import dataclasses
+        return dataclasses.asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "SolverConfig":
+        import dataclasses
+        valid_keys = {f.name for f in dataclasses.fields(cls)}
+        filtered_data = {k: v for k, v in data.items() if k in valid_keys}
+        int_fields = ("n_points", "power_steps", "filter_order")
+        for int_f in int_fields:
+            if int_f in filtered_data and filtered_data[int_f] is not None:
+                filtered_data[int_f] = int(filtered_data[int_f])
+        if "z_records" in filtered_data and filtered_data["z_records"] is not None:
+            filtered_data["z_records"] = int(filtered_data["z_records"])
+        bool_fields = ("adaptive_step", "filter_alias", "raman_enabled", "shock_enabled")
+        for bool_f in bool_fields:
+            if bool_f in filtered_data and filtered_data[bool_f] is not None:
+                filtered_data[bool_f] = bool(filtered_data[bool_f])
+        float_fields = (
+            "time_window", "initial_step", "min_step", "max_step", "tolerance",
+            "power_min", "power_max", "filter_cutoff", "safety_factor",
+        )
+        for float_f in float_fields:
+            if float_f in filtered_data and filtered_data[float_f] is not None:
+                filtered_data[float_f] = float(filtered_data[float_f])
+        if "simulation_type" in filtered_data and filtered_data["simulation_type"] is not None:
+            filtered_data["simulation_type"] = str(filtered_data["simulation_type"])
+        if "method" in filtered_data and filtered_data["method"] is not None:
+            filtered_data["method"] = str(filtered_data["method"])
+        return cls(**filtered_data)
+
+
 
 @dataclass
 class SimulationState:
@@ -377,3 +482,16 @@ class SimulationState:
     def spectral_power(self) -> np.ndarray:
         """Spectral power |A_tilde(z, Omega)|^2."""
         return np.abs(self.a_w) ** 2
+
+
+def compute_auto_grid_size(time_window_s: float, t0_s: float,
+                           raman_enabled: bool, tau1: float = 12.2e-15) -> int:
+    if raman_enabled:
+        dt_max = min(tau1 / 4.0, t0_s / 8.0)
+    else:
+        dt_max = t0_s / 4.0
+    n_min = time_window_s / dt_max
+    n = 1
+    while n < n_min:
+        n <<= 1
+    return max(1024, min(n, 131072))

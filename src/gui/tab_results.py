@@ -21,7 +21,7 @@ except ImportError:
     QSvgGenerator = None
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
-    QPushButton, QFileDialog, QSlider, QSplitter, QGridLayout, QMessageBox
+    QPushButton, QFileDialog, QSlider, QDoubleSpinBox, QSplitter, QGridLayout, QMessageBox
 )
 
 from src.solver.config import SimulationState
@@ -116,6 +116,40 @@ class TabResultsWidget(QWidget):
             y_label="Spectral Power [dB]",
         )
 
+        
+        # Wavelength Window Control Toolbar for 1D Freq Plot
+        self.wl_toolbar = QHBoxLayout()
+        self.wl_toolbar.setContentsMargins(4, 0, 4, 0)
+        self.wl_toolbar.addWidget(QLabel("λ Range [nm]:"))
+        
+        self.spin_wl_min = QDoubleSpinBox()
+        self.spin_wl_min.setRange(100.0, 5000.0)
+        self.spin_wl_min.setValue(400.0)
+        self.spin_wl_min.setDecimals(1)
+        
+        self.spin_wl_max = QDoubleSpinBox()
+        self.spin_wl_max.setRange(100.0, 5000.0)
+        self.spin_wl_max.setValue(1600.0)
+        self.spin_wl_max.setDecimals(1)
+        
+        self.btn_wl_reset = QPushButton("Reset Fit")
+        
+        self.wl_toolbar.addWidget(self.spin_wl_min)
+        self.wl_toolbar.addWidget(QLabel("to"))
+        self.wl_toolbar.addWidget(self.spin_wl_max)
+        self.wl_toolbar.addWidget(self.btn_wl_reset)
+        self.wl_toolbar.addStretch()
+        
+        # Add toolbar to the LinePlotWidget's vertical layout
+        self.plot_freq_1d.layout().addLayout(self.wl_toolbar)
+        
+        self.spin_wl_min.valueChanged.connect(self._on_wl_range_changed)
+        self.spin_wl_max.valueChanged.connect(self._on_wl_range_changed)
+        self.btn_wl_reset.clicked.connect(self._on_wl_reset_clicked)
+        
+        # apply initial range
+        self._on_wl_range_changed()
+
         main_layout.addWidget(self.plot_container, 1)
 
         # Set default 2x2 layout
@@ -204,14 +238,59 @@ class TabResultsWidget(QWidget):
         wl_nm, psd_db = spectrum_to_db(initial_state.a_w, initial_state.omega, self.omega0, db_floor=-200.0)
         self.plot_freq_1d.set_before_curve(wl_nm, psd_db)
 
+        # -----------------------------
+        # Live 2D Colormap Initialization
+        # -----------------------------
+        self.MAX_DISPLAY_BINS = 1024
+        
+        N_pts_time = len(t_ps)
+        N_pts_freq = min(len(wl_nm), self.MAX_DISPLAY_BINS)
+        
+        self.display_wl = np.linspace(wl_nm[0], wl_nm[-1], N_pts_freq)
+        self.display_t = t_ps
+
+        MAX_STEPS = 5000
+        self.live_time_map = np.full((MAX_STEPS, N_pts_time), -40.0)
+        self.live_freq_map = np.full((MAX_STEPS, N_pts_freq), -40.0)
+        self.live_y_coords = np.zeros(MAX_STEPS)
+        self.live_step_idx = 0
+
     def update_live_state(self, state: SimulationState) -> None:
-        """Update 1D 'after' curves in real-time during live simulation."""
+        """Update 1D 'after' curves and live 2D maps in real-time."""
         t_ps = envelope_to_time_ps(state.t)
         intensity = np.abs(state.a_t) ** 2
         self.plot_time_1d.set_after_curve(t_ps, intensity)
 
         wl_nm, psd_db = spectrum_to_db(state.a_w, state.omega, self.omega0, db_floor=-200.0)
         self.plot_freq_1d.set_after_curve(wl_nm, psd_db)
+
+        # Update Live 2D Map
+        if self.live_step_idx < self.live_time_map.shape[0]:
+            idx = self.live_step_idx
+            
+            # Time map
+            max_int = np.max(intensity)
+            if max_int > 0:
+                self.live_time_map[idx, :] = 10.0 * np.log10(np.maximum(intensity / max_int, 1e-4))
+            
+            # Freq map interpolated
+            self.live_freq_map[idx, :] = np.interp(self.display_wl, wl_nm, psd_db)
+            
+            if self.current_sim_type == "spectrum_vs_distance":
+                self.live_y_coords[idx] = state.z * 100.0
+            else:
+                self.live_y_coords[idx] = state.power / 1e3
+                
+            y_min = float(self.live_y_coords[0])
+            y_max = float(self.live_y_coords[idx]) if self.live_y_coords[idx] > y_min else y_min + 1.0
+            
+            # Update density widgets
+            self.plot_freq_2d.update_data(self.live_freq_map[:idx+1, :], (float(self.display_wl[0]), float(self.display_wl[-1])), (y_min, y_max))
+            
+            if self.current_sim_type == "spectrum_vs_distance":
+                self.plot_time_2d.update_data(self.live_time_map[:idx+1, :], (float(t_ps[0]), float(t_ps[-1])), (y_min, y_max))
+
+            self.live_step_idx += 1
 
     def render_full_simulation(self, final_state: SimulationState, history: List[SimulationState]) -> None:
         """Render completed 2D density maps and final 1D profiles."""
@@ -221,15 +300,16 @@ class TabResultsWidget(QWidget):
             return
 
         N_steps = len(history)
-        N_pts = len(final_state.t)
-
-        time_map_db = np.zeros((N_steps, N_pts))
-        spec_map_db = np.zeros((N_steps, N_pts))
-        y_coords = np.zeros(N_steps)
-
-        # Get wavelength coordinate
         wl_nm, _ = spectrum_to_db(history[0].a_w, history[0].omega, self.omega0)
         t_ps = envelope_to_time_ps(history[0].t)
+        
+        N_pts_time = len(t_ps)
+        N_pts_freq = min(len(wl_nm), getattr(self, 'MAX_DISPLAY_BINS', 1024))
+        display_wl = np.linspace(wl_nm[0], wl_nm[-1], N_pts_freq)
+
+        time_map_db = np.zeros((N_steps, N_pts_time))
+        spec_map_db = np.zeros((N_steps, N_pts_freq))
+        y_coords = np.zeros(N_steps)
 
         for i, s in enumerate(history):
             # Intensity in dB
@@ -241,8 +321,8 @@ class TabResultsWidget(QWidget):
                 time_map_db[i, :] = -40.0
 
             # Spectrum in dB
-            _, s_db = spectrum_to_db(s.a_w, s.omega, self.omega0, db_floor=-40.0)
-            spec_map_db[i, :] = s_db
+            s_wl_nm, s_db = spectrum_to_db(s.a_w, s.omega, self.omega0, db_floor=-40.0)
+            spec_map_db[i, :] = np.interp(display_wl, s_wl_nm, s_db)
 
             if self.current_sim_type == "spectrum_vs_distance":
                 y_coords[i] = s.z * 100.0  # m to cm
@@ -253,14 +333,19 @@ class TabResultsWidget(QWidget):
         y_max = float(y_coords[-1]) if y_coords[-1] > y_min else y_min + 1.0
 
         # Render 2D Freq map
-        self.plot_freq_2d.update_data(spec_map_db, (float(wl_nm[0]), float(wl_nm[-1])), (y_min, y_max))
+        self.plot_freq_2d.update_data(spec_map_db, (float(display_wl[0]), float(display_wl[-1])), (y_min, y_max))
 
         # Render 2D Time map if distance mode
         if self.current_sim_type == "spectrum_vs_distance":
             self.plot_time_2d.update_data(time_map_db, (float(t_ps[0]), float(t_ps[-1])), (y_min, y_max))
 
         # Update final 1D line curves
-        self.update_live_state(final_state)
+        # Note: Do not call update_live_state here as it would duplicate the 1D update and advance the live_step_idx.
+        t_ps_final = envelope_to_time_ps(final_state.t)
+        intensity_final = np.abs(final_state.a_t) ** 2
+        self.plot_time_1d.set_after_curve(t_ps_final, intensity_final)
+        wl_nm_final, psd_db_final = spectrum_to_db(final_state.a_w, final_state.omega, self.omega0, db_floor=-200.0)
+        self.plot_freq_1d.set_after_curve(wl_nm_final, psd_db_final)
 
     def _on_cmap_changed(self, cmap_name: str) -> None:
         self.plot_time_2d.set_colormap(cmap_name)
@@ -361,6 +446,18 @@ class TabResultsWidget(QWidget):
                 return False, f"Unsupported file format for path: {fpath}"
         except Exception as exc:
             return False, f"Failed to export data: {exc}"
+
+
+
+    def _on_wl_range_changed(self):
+        wl_min = self.spin_wl_min.value()
+        wl_max = self.spin_wl_max.value()
+        if hasattr(self.plot_freq_1d, 'set_x_range'):
+            self.plot_freq_1d.set_x_range(wl_min, wl_max)
+            
+    def _on_wl_reset_clicked(self):
+        if hasattr(self.plot_freq_1d, 'plot_item'):
+            self.plot_freq_1d.plot_item.enableAutoRange(axis='x')
 
     def _on_export_clicked(self) -> None:
         """Export publication figure snapshot or raw simulation dataset."""

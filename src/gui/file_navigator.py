@@ -14,7 +14,9 @@ import pyqtgraph as pg
 from typing import Optional, List, Dict, Any
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QComboBox,
+    QFormLayout,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
     QListWidget, QListWidgetItem, QFileDialog, QSplitter,
     QTableWidget, QTableWidgetItem, QGroupBox
 )
@@ -85,12 +87,35 @@ class FileNavigatorWidget(QWidget):
         self.lbl_metadata.setStyleSheet("font-family: monospace; font-size: 9pt; color: #CCCCCC;")
         preview_layout.addWidget(self.lbl_metadata)
 
+        # HDF5 Selection Controls
+        h5_layout = QFormLayout()
+        self.combo_group = QComboBox()
+        self.combo_x = QComboBox()
+        self.combo_y = QComboBox()
+        h5_layout.addRow("Group:", self.combo_group)
+        h5_layout.addRow("X Dataset:", self.combo_x)
+        h5_layout.addRow("Y Dataset:", self.combo_y)
+        preview_layout.addLayout(h5_layout)
+        
+        self.combo_group.currentTextChanged.connect(self._on_h5_group_changed)
+        self.combo_x.currentTextChanged.connect(self._update_h5_preview)
+        self.combo_y.currentTextChanged.connect(self._update_h5_preview)
+
+
         # Action Button: Use as Active Dispersion
         self.btn_use_dispersion = QPushButton("✓ Use Selected File as Active Dispersion")
         self.btn_use_dispersion.setStyleSheet("background-color: #2E7D32; color: white; font-weight: bold; padding: 6px;")
         self.btn_use_dispersion.setEnabled(False)
         self.btn_use_dispersion.clicked.connect(self._on_use_file)
         preview_layout.addWidget(self.btn_use_dispersion)
+
+        active_box = QHBoxLayout()
+        active_box.addWidget(QLabel("Active Dispersion File:"))
+        self.txt_import_path = QLineEdit()
+        self.txt_import_path.setReadOnly(True)
+        self.txt_import_path.setPlaceholderText("No active dispersion file selected")
+        active_box.addWidget(self.txt_import_path)
+        preview_layout.addLayout(active_box)
 
         splitter.addWidget(preview_group)
         layout.addWidget(splitter)
@@ -136,20 +161,14 @@ class FileNavigatorWidget(QWidget):
             wl = None
             d = None
             if file_path.lower().endswith((".h5", ".hdf5")):
+                self.combo_group.blockSignals(True)
+                self.combo_group.clear()
                 with h5py.File(file_path, "r") as h5f:
-                    keys = list(h5f.keys())
-                    self.lbl_metadata.setText(f"HDF5 Datasets: {keys}")
-                    # Attempt preview
-                    if "wavelength_nm" in h5f and "D" in h5f:
-                        wl = np.array(h5f["wavelength_nm"])
-                        d = np.array(h5f["D"])
-                    elif "wavelength" in h5f and "D" in h5f:
-                        wl = np.array(h5f["wavelength"])
-                        d = np.array(h5f["D"])
-                    elif "wavelength" in h5f and "beta" in h5f:
-                        wl = np.array(h5f["wavelength"])
-                        beta = np.array(h5f["beta"])
-                        self.curve.setData(wl, beta)
+                    groups = self._traverse_h5(h5f)
+                    self.combo_group.addItems(groups)
+                self.combo_group.blockSignals(False)
+                if self.combo_group.count() > 0:
+                    self._on_h5_group_changed(self.combo_group.itemText(0))
             elif file_path.lower().endswith(".csv"):
                 with open(file_path, "r", encoding="utf-8") as f:
                     reader = csv.reader(f)
@@ -199,4 +218,60 @@ class FileNavigatorWidget(QWidget):
 
     def _on_use_file(self) -> None:
         if self.active_file_path:
+            self.txt_import_path.setText(self.active_file_path)
             self.file_selected.emit(self.active_file_path)
+
+    def _traverse_h5(self, node, path="/", groups=None):
+        if groups is None: groups = []
+        if isinstance(node, h5py.Group):
+            groups.append(path)
+            for key, val in node.items():
+                self._traverse_h5(val, path + key + "/", groups)
+        return groups
+
+    def _on_h5_group_changed(self, group_path: str):
+        if not self.active_file_path or not self.active_file_path.endswith((".h5", ".hdf5")):
+            return
+        try:
+            with h5py.File(self.active_file_path, "r") as f:
+                if group_path == "/": group = f
+                else: group = f[group_path.rstrip("/")]
+                
+                datasets = [k for k, v in group.items() if isinstance(v, h5py.Dataset)]
+                self.combo_x.blockSignals(True)
+                self.combo_y.blockSignals(True)
+                self.combo_x.clear()
+                self.combo_y.clear()
+                self.combo_x.addItems(datasets)
+                self.combo_y.addItems(datasets)
+                
+                # auto-select
+                if "wavelength" in datasets: self.combo_x.setCurrentText("wavelength")
+                elif "omega" in datasets: self.combo_x.setCurrentText("omega")
+                
+                if "D" in datasets: self.combo_y.setCurrentText("D")
+                elif "beta" in datasets: self.combo_y.setCurrentText("beta")
+                
+                self.combo_x.blockSignals(False)
+                self.combo_y.blockSignals(False)
+                self._update_h5_preview()
+        except Exception:
+            pass
+            
+    def _update_h5_preview(self):
+        if not self.active_file_path or not self.active_file_path.endswith((".h5", ".hdf5")):
+            return
+        g = self.combo_group.currentText()
+        x_name = self.combo_x.currentText()
+        y_name = self.combo_y.currentText()
+        if not x_name or not y_name:
+            return
+        try:
+            with h5py.File(self.active_file_path, "r") as f:
+                if g == "/": group = f
+                else: group = f[g.rstrip("/")]
+                wl = np.array(group[x_name])
+                d = np.array(group[y_name])
+                self.curve.setData(wl, d)
+        except Exception:
+            pass

@@ -15,20 +15,20 @@ from src.solver.engine import solve_generator
 
 
 def test_hult_soliton_fission_and_photon_conservation():
-    """Propagate 10 kW pulse in NL-1.7-770 PCF past fission length (z = 1.0 cm > L_fiss = 7.9 mm)."""
-    lambda0 = 835e-9
-    gamma = 0.11
+    """Propagate 10 kW pulse in NL-1.7-770 PCF past fission length."""
+    lambda0 = 850e-9
+    gamma = 0.045
     t_fwhm = 50e-15
     p0 = 10000.0  # 10 kW
-    length = 0.012  # 1.2 cm (past L_fiss ~ 7.9 mm)
+    length = 0.10  # 10 cm
 
     betas = [
-        -1.183e-26,
-        8.10e-41,
-        -1.16e-55,
-        2.59e-70,
-        5.38e-85,
-        0.0,
+        -1.276e-26,
+        8.119e-41,
+        -1.321e-55,
+        3.032e-70,
+        -4.196e-85,
+        2.570e-100,
     ]
 
     disp = DispersionConfig.from_si(
@@ -69,7 +69,7 @@ def test_hult_soliton_fission_and_photon_conservation():
     states = list(solve_generator(pulse, fiber, solver))
     final = states[-1]
 
-    # Verify propagation reached 1.2 cm
+    # Verify propagation reached 10 cm
     assert pytest.approx(final.z, abs=1e-6) == length
 
     # Verify peak power compressed / fission occurred (initial 10 kW reaches higher peak before fission)
