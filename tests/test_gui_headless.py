@@ -526,6 +526,15 @@ def test_results_frequency_and_time_synchronization(qtbot):
     assert pytest.approx(time_2d_range[0]) == -2.5
     assert pytest.approx(time_2d_range[1]) == 2.5
 
+    # Verify 1D Freq plot Y range: [-200.0, 10.0] dB
+    freq_1d_y = results.plot_freq_1d.get_y_range()
+    assert pytest.approx(freq_1d_y[0]) == -200.0
+    assert pytest.approx(freq_1d_y[1]) == 10.0
+
+    # Verify Colormap levels: (-40.0, 0.0) dB
+    assert results.plot_freq_2d.colorbar.levels() == (-40.0, 0.0)
+    assert results.plot_time_2d.colorbar.levels() == (-40.0, 0.0)
+
 
 def test_spinbox_adjustments_synchronize_1d_and_2d(qtbot):
     """Verify Ticket B1 & B2: adjusting spinbox bounds updates 1D and 2D widgets simultaneously and interactive 2D updates."""
@@ -570,15 +579,16 @@ def test_spinbox_adjustments_synchronize_1d_and_2d(qtbot):
     assert pytest.approx(results.plot_freq_2d.get_x_range()) == (700.0, 950.0)
 
 
-def test_osa_resolution_dropdown_smoothing(qtbot):
-    """Verify Ticket B2: OSA resolution dropdown applies smoothing cleanly without errors and preserves raw data."""
+def test_raw_spectrum_rendering_no_osa_smoothing(qtbot):
+    """Verify raw simulation spectrum is rendered directly without artificial OSA smoothing filters and with strict normalization."""
     from src.gui.tab_results import TabResultsWidget
+    from src.gui.plots import spectrum_to_db
     results = TabResultsWidget()
     qtbot.addWidget(results)
 
-    # Verify OSA dropdown initial state
-    assert results.combo_osa.currentText() == "1.0 nm (Default)"
-    assert results._get_active_osa_res() == 1.0
+    # Verify combo_osa has been removed from results toolbar
+    assert not hasattr(results, "combo_osa")
+    assert not hasattr(results, "_get_active_osa_res")
 
     # Setup state with structured spectrum
     N = 512
@@ -593,34 +603,37 @@ def test_osa_resolution_dropdown_smoothing(qtbot):
     results.prepare_for_simulation(s1, "RK4IP", center_wavelength=850e-9)
     results.render_full_simulation(s2, [s1, s2])
 
-    # Switch to Raw (No filter)
-    results.combo_osa.setCurrentText("Raw (No filter)")
-    assert results._get_active_osa_res() == 0.0
-    _, y_raw = results.plot_freq_1d.curve_after.getData()
+    # Verify 1D curve matches raw spectrum_to_db directly without smoothing
+    x_after, y_after = results.plot_freq_1d.curve_after.getData()
+    raw_wl, raw_db = spectrum_to_db(s2.a_w, s2.omega, results.omega0)
+    np.testing.assert_allclose(x_after, raw_wl)
+    np.testing.assert_allclose(y_after, raw_db)
 
-    # Switch to 0.5 nm
-    results.combo_osa.setCurrentText("0.5 nm")
-    assert results._get_active_osa_res() == 0.5
-    _, y_05 = results.plot_freq_1d.curve_after.getData()
+    # Verify normalization peak is exactly 0.0 dB
+    assert pytest.approx(np.max(y_after), abs=1e-10) == 0.0
 
-    # Switch to 1.0 nm
-    results.combo_osa.setCurrentText("1.0 nm (Default)")
-    assert results._get_active_osa_res() == 1.0
-    _, y_10 = results.plot_freq_1d.curve_after.getData()
+    # Verify default view ranges
+    assert results.plot_freq_2d.colorbar.levels() == (-40.0, 0.0)
+    assert results.plot_time_2d.colorbar.levels() == (-40.0, 0.0)
+    y_min, y_max = results.plot_freq_1d.get_y_range()
+    assert pytest.approx(y_min) == -200.0
+    assert pytest.approx(y_max) == 10.0
 
-    # Switch to 2.0 nm
-    results.combo_osa.setCurrentText("2.0 nm")
-    assert results._get_active_osa_res() == 2.0
-    _, y_20 = results.plot_freq_1d.curve_after.getData()
 
-    # Verify total variation (high-frequency ripple) monotonically decreases with stronger smoothing
-    tv_raw = np.sum(np.abs(np.diff(y_raw)))
-    tv_05 = np.sum(np.abs(np.diff(y_05)))
-    tv_10 = np.sum(np.abs(np.diff(y_10)))
-    tv_20 = np.sum(np.abs(np.diff(y_20)))
-    assert tv_raw >= tv_05 >= tv_10 >= tv_20
+def test_immediate_window_close_during_simulation_teardown(qtbot):
+    """Verify cooperative teardown cleanly joins and destroys QThread on rapid close without dangling threads."""
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
 
-    # Switch back to Raw and verify original raw data is intact (no degradation)
-    results.combo_osa.setCurrentText("Raw (No filter)")
-    _, y_restored = results.plot_freq_1d.curve_after.getData()
-    np.testing.assert_allclose(y_raw, y_restored, rtol=1e-10)
+    # Trigger simulation start
+    window.tab_controls._on_run_clicked()
+    assert window.worker_thread is not None
+
+    # Immediately close window while thread is starting or running
+    window.close()
+    qtbot.wait(100)
+
+    assert window.worker_thread is None or not window.worker_thread.isRunning()
+    assert window.worker is None or not window.worker.is_running
+

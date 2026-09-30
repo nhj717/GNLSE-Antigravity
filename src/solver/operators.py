@@ -213,13 +213,14 @@ def compute_nonlinear_operator(
     shock_factor: Optional[np.ndarray] = None,
     raman_fft: Optional[np.ndarray] = None,
     raman_fr: float = 0.0,
+    dt: float = 1.0,
 ) -> np.ndarray:
     """Compute frequency-domain nonlinear operator N_hat[A] per Spec §2.5:
 
         Step 1: I(T) = |A(T)|^2
         Step 2: Raman convolution via FFT: h_R * I
         Step 3: Total nonlinear response B(T) = A(T) * [(1 - f_R) * I + f_R * (h_R * I)]
-        Step 4: N_hat = i * gamma * (1 + Omega / omega_0) * FFT(B)
+        Step 4: N_hat = i * gamma * (1 + Omega / omega_0) * IFFT(B)
 
     Parameters:
     - a_t: Complex field envelope array in time domain A(T) [sqrt(W)]
@@ -227,6 +228,7 @@ def compute_nonlinear_operator(
     - shock_factor: 1D real array (1 + Omega/omega0), or None if self-steepening is OFF
     - raman_fft: Precomputed FFT of discrete Raman kernel from prepare_raman_fft
     - raman_fr: Fractional Raman contribution (0.0 if Raman is OFF)
+    - dt: Sampling interval Delta T [s] (default 1.0)
 
     Returns:
     - N_hat: 1D complex array of length N in frequency domain [sqrt(W) / m]
@@ -234,12 +236,12 @@ def compute_nonlinear_operator(
     intensity = np.abs(a_t) ** 2
 
     if raman_fr > 0.0 and raman_fft is not None:
-        i_conv = raman_convolution(intensity, raman_fft)
+        i_conv = raman_convolution(intensity, raman_fft, dt)
         b_t = a_t * ((1.0 - raman_fr) * intensity + raman_fr * i_conv)
     else:
         b_t = a_t * intensity
 
-    b_w = np.fft.fft(b_t)
+    b_w = np.fft.ifft(b_t)
 
     if shock_factor is not None:
         return 1j * gamma * shock_factor * b_w
@@ -262,7 +264,7 @@ def compute_photon_number(
 ) -> float:
     """Compute photon number N_ph(z) [photons, arbitrary units] per Spec §2.9 & Amendment 9:
 
-        N_ph = (dt^2 / N) * sum_{k: omega_0 + Omega_k > 0} (|A_tilde_k|^2 / (omega_0 + Omega_k))
+        N_ph = dt * sum_{k: omega_0 + Omega_k > 0} (|A_tilde_k|^2 / (omega_0 + Omega_k))
 
     Includes DC singularity guard: excludes frequencies where omega_0 + Omega_k <= 0.
     """
@@ -271,9 +273,8 @@ def compute_photon_number(
     if not np.any(valid_mask):
         return 0.0
 
-    n_points = len(a_w)
     integrand = (np.abs(a_w[valid_mask]) ** 2) / w_total[valid_mask]
-    return float((dt**2 / n_points) * np.sum(integrand))
+    return float(dt * np.sum(integrand))
 
 
 def relative_error(current: float, initial: float) -> float:

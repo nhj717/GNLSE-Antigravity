@@ -44,13 +44,11 @@ def prepare_raman_fft(
 ) -> np.ndarray:
     """Precompute the frequency-domain discrete Raman convolution kernel FFT(h_R * dt).
 
-    As derived in GNLSE Theoretical Spec §2.5 and Amendment 6:
-    - Discrete response is causal: h_R[n] = h_R(n * dt) for n = 0, ..., N-1.
-    - Since h_R decays with tau2 = 32 fs, it vanishes well before N * dt.
-    - Discrete Riemann normalization sum(h_R[n] * dt) is strictly normalized to 1.0.
-    - The discrete circular convolution with intensity I_n:
-        (h_R * I)_n = IFFT(raman_fft * FFT(I))_n
-      directly yields the convolution integral in power units [W].
+    As derived in GNLSE Theoretical Spec §2.5 and optics Fourier convention:
+    - Retarded time grid is centered: t = (arange(N) - N / 2.0) * dt.
+    - Continuous response h_R(T) evaluated for t > 0.0.
+    - Strictly normalized with discrete sum: hr /= sum(hr * dt).
+    - Returning n_points * ifft(fftshift(hr)) maps response to frequency domain.
 
     Parameters:
     - n_points: Number of grid points N
@@ -59,32 +57,33 @@ def prepare_raman_fft(
     - tau2: Raman damping timescale [s]
 
     Returns:
-    - raman_fft: 1D complex array of length N containing FFT(h_R_discrete)
+    - raman_fft: 1D complex array of length N containing frequency-domain Raman kernel
     """
-    t_causal = np.arange(n_points, dtype=np.float64) * dt
-    hr_continuous = blow_wood_raman_response(t_causal, tau1=tau1, tau2=tau2)
+    t = (np.arange(n_points, dtype=np.float64) - (n_points / 2.0)) * dt
+    hr = blow_wood_raman_response(t, tau1=tau1, tau2=tau2)
 
-    # Numerical integral for exact discrete normalization:
-    hr_integral = float(np.sum(hr_continuous) * dt)
+    hr_integral = float(np.sum(hr * dt))
     if hr_integral > 0.0:
-        hr_discrete = (hr_continuous * dt) / hr_integral
-    else:
-        hr_discrete = hr_continuous * dt
+        hr /= hr_integral
 
-    return np.fft.fft(hr_discrete)
+    return n_points * np.fft.ifft(np.fft.fftshift(hr))
 
 
 def raman_convolution(
     intensity: np.ndarray,
     raman_fft: np.ndarray,
+    dt: float,
 ) -> np.ndarray:
-    """Compute the Raman convolution integral (h_R * |A|^2)(T) via FFT.
+    """Compute the Raman convolution integral (h_R * |A|^2)(T) via optics FFT.
 
     Parameters:
     - intensity: Optical intensity array |A(T)|^2 [W]
-    - raman_fft: Precomputed FFT of discrete Raman kernel from prepare_raman_fft
+    - raman_fft: Precomputed frequency-domain Raman kernel from prepare_raman_fft
+    - dt: Sampling interval Delta T [s]
 
     Returns:
     - Real-valued convolution array in [W]
     """
-    return np.real(np.fft.ifft(raman_fft * np.fft.fft(intensity)))
+    i_w = np.fft.ifft(intensity)
+    rs = dt * np.fft.fft(i_w * raman_fft)
+    return np.real(rs)

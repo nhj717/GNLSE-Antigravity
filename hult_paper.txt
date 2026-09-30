@@ -1,0 +1,709 @@
+3770
+
+JOURNAL OF LIGHTWAVE TECHNOLOGY, VOL. 25, NO. 12, DECEMBER 2007
+
+A Fourth-Order Runge–Kutta in the Interaction
+Picture Method for Simulating Supercontinuum
+Generation in Optical Fibers
+Johan Hult
+
+Abstract—An efficient algorithm, which exhibits a fourth-order
+global accuracy, for the numerical solution of the normal and generalized nonlinear Schrödinger equations is presented. It has applications for studies of nonlinear pulse propagation and spectral
+broadening in optical fibers. Simulation of supercontinuum generation processes, in particular, places high demands on numerical
+accuracy, which makes efficient high-order schemes attractive.
+The algorithm that is presented here is an adaptation for use in
+the nonlinear optics field of the fourth-order Runge–Kutta in the
+Interaction Picture (RK4IP) method, which was originally developed for studies on Bose–Einstein condensates. The performance
+of the RK4IP method is validated and compared to a number
+of conventional methods by modeling both the propagation of
+a second-order soliton and the generation of supercontinuum
+radiation. It exhibits the expected global fourth-order accuracy
+for both problems studied and is the most accurate and efficient
+of the methods tested.
+Index Terms—Nonlinear optics, nonlinear Schrödinger equation (NLSE), numerical analysis, optical solitons, Runge–Kutta
+method, split-step Fourier method, supercontinuum radiation.
+
+I. I NTRODUCTION
+
+E
+
+XTREME spectral broadening can be achieved in a variety of nonlinear media using intense narrowband optical pulses, yielding broadband spectrally continuous radiation
+which is known as a supercontinuum. Broadband supercontinuum light sources have found applications in fields such as
+spectroscopy, microscopy, pulse compression, telecommunications, and optical device testing [1], [2]. Of particular interest to
+practical applications is the high efficiency of supercontinuum
+generation in optical fibers. Normally, a photonic crystal fiber
+(PCF) [3] or a highly nonlinear fiber (HNLF) [4] has been
+employed for this purpose, but supercontinuum generation in
+a conventional fiber is also possible [5].
+A nonlinear Schrödinger equation (NLSE) can be used to
+study pulse propagation in optical fibers and has extensively
+been used for modeling of optical-fiber communications systems and for the study of optical solitons. In its standard form,
+
+Manuscript received July 17, 2007; revised September 3, 2007. This work
+was supported by the Research Grant EP/C012488/1 and Advanced Research
+Fellowship EP/C012399/1 from the Engineering and Physical Sciences Research Council (EPSRC).
+The author is with the Department of Chemical Engineering, University of
+Cambridge, CB2 3RA Cambridge, U.K. (e-mail: jfh36@cam.ac.uk).
+Color versions of one or more of the figures in this paper are available online
+at http://ieeexplore.ieee.org.
+Digital Object Identifier 10.1109/JLT.2007.909373
+
+however, it only describes the effects of second-order dispersion and self-phase modulation (SPM). To accurately describe
+the process of supercontinuum generation, addition of terms
+representing loss, higher order dispersion, stimulated Raman
+scattering, and frequency dependence of the nonlinear response
+is necessary, resulting in a generalized NLSE (GNLSE) [6]. The
+NLSE and GNLSE are nonlinear partial differential equations
+(PDEs) that, in almost all cases, cannot analytically be solved.
+A numerical approach is therefore necessary. Numerical modeling of supercontinuum generation can help in shedding light
+on the underlying spectral broadening processes [2]. It can also
+be used to guide fiber design and pump laser choice in order
+to achieve particular desired properties of the supercontinuum
+radiation [7]. Numerical solutions of the GNLSE are often
+time-consuming, in particular, for long pump pulses or very
+broad spectra, so efficient numerical integration schemes are
+desirable.
+The most commonly employed numerical scheme for solving
+the GNLSE is the split-step Fourier method [6]. In the splitstep method, dispersive and nonlinear effects are separately
+integrated, and the results are combined to construct the full
+solution. The dispersive term, which is linear, is evaluated
+in the frequency domain through the use of the fast Fourier
+transform (FFT), whereas the nonlinear term is treated in the
+time domain. Simple split-step schemes of global second- [8]
+or third-order [9]–[11] accuracy are normally employed. It is
+also possible to construct higher order split-step schemes such
+as the fourth-order scheme of Blow and Wood [12]. However,
+global accuracy cannot exceed the accuracy of the method that
+is used to integrate the nonlinear step, and for this purpose,
+Runge–Kutta or implicit schemes are normally used.
+The Gross–Pitaevskii equation is a nonlinear PDE that is
+used to describe the dynamics of Bose–Einstein condensates.
+It has a structure that is similar to the optical NLSE and
+GNLSE equations, but with time and space variables playing
+opposite roles. A highly efficient and accurate algorithm, which
+is called the fourth-order Runge–Kutta in the interaction picture
+(RK4IP) method and is described in detail by Caradoc-Davies
+[13], has been developed to solve the Gross–Pitaevskii equation. This RK4IP method has successfully been employed for
+numerical studies of a range of phenomena in Bose–Einstein
+condensates [14]–[16].
+The RK4IP method is closely related to the split-step Fourier
+method. The algorithm is based on transforming the problem
+into an interaction picture, which allows the use of conventional
+
+0733-8724/$25.00 © 2007 IEEE
+Authorized licensed use limited to: Max-Planck-Institut für die Physik des Lichts. Downloaded on October 25,2025 at 00:24:50 UTC from IEEE Xplore. Restrictions apply.
+
+HULT: FOURTH-ORDER RUNGE–KUTTA IN THE INTERACTION PICTURE METHOD
+
+explicit techniques to step the solution forward. A high efficiency is achieved by combining a fourth-order Runge–Kutta
+technique for stepping, with an appropriate choice of separation
+between the normal and interaction pictures. The resulting
+method exhibits fourth-order global accuracy, is memory efficient, and is easy to implement in solving the NLSE or GNLSE
+equations in optical fibers.
+This paper is organized as follows. First, the NLSE and
+GNLSE equations are introduced; then, a short review of the
+split-step Fourier method and its different implementations is
+given. The RK4IP algorithm and its implementation for the
+study of optical-pulse propagation are then described. Next, the
+performance of the RK4IP method is validated and compared
+to a number of split-step Fourier schemes for two different
+nonlinear optical-pulse-propagation problems. The propagation
+of a second-order soliton, as well as the generation of broadband supercontinuum radiation, is studied. The results of these
+comparisons are discussed, and finally, the conclusion follows.
+
+the propagation constant β(ω) around the center frequency ω0 .
+The fractional contribution of the delayed Raman response to
+nonlinear polarization is represented by fR , in which a value
+of fR = 0.18 is often assumed [20]. In (2), hR (t) is the Raman
+response function of a silica fiber, in which the analytical form
+proposed by Hollenbeck and Cantrell [21] was used in this
+paper. The first and second terms on the right-hand side of
+(2) describe fiber loss and dispersion, respectively. The third
+term describes the nonlinear effects. The temporal derivative in
+this term is responsible for self-steepening and optical shock
+formation, whereas the convolution integral describes the delayed Raman response, which leads to effects such as intrapulse
+Raman scattering.
+C. Review of the Split-Step Fourier Method
+For numerical integration, it is useful to represent (1) and (2)
+in the form
+∂A
+= (D̂ + N̂ )A
+∂z
+
+II. N UMERICAL M ETHOD
+A. Nonlinear Schrödinger Equation (NLSE)
+
+(3)
+
+where D̂ is a dispersion operator, and N̂ is a nonlinear operator.
+For the NLSE (1), they are given by
+
+The NLSE, which can be written as
+∂A
+β2 ∂ 2 A
+= −i
++ iγ|A|2 A
+∂z
+2 ∂T 2
+
+3771
+
+(1)
+
+governs the propagation of light in a lossless optical fiber
+exhibiting second-order dispersion [6]. In (1), A(z, t) is the
+complex field envelope, z is the distance, t is the retarded time
+traveling at the envelope group velocity, β2 is the second-order
+dispersion, and γ is the nonlinear coefficient. The first term
+on the right-hand side is a linear term describing dispersion,
+whereas the second term is nonlinear and describes SPM. In the
+anomalous dispersion regime, where β2 < 0, self-preserving
+soliton solutions to (1) exist [17].
+B. GNLSE
+
+D̂ = − i
+
+β2 ∂ 2
+2 ∂T 2
+
+(4)
+
+N̂ = iγ|A|2
+
+(5)
+
+whereas for the GNLSE (2), they are given by
+
+
+ in−1 ∂ n
+α
+D̂ = − −
+βn
+(6)
+2
+n! ∂T n
+k≥2
+
+
+1
+1 ∂
+N̂ = iγ
+1+
+A
+ω0 ∂T
+
+
+∞
+× (1−fR )A|A|2 +fR A hR (τ ) |A(z, T −τ )|2 dτ .
+0
+
+Various forms of the GNLSE can be obtained from the
+NLSE (1) by including terms describing the effects of fiber
+loss, higher order dispersion, stimulated Raman scattering, and
+frequency dependence of the nonlinear response [12], [18].
+GNLSE equations can be derived from analytical simplifications of Maxwell’s equations [6]. A form of the GNLSE that is
+commonly employed for numerical simulations of supercontinuum generation is [19]
+
+
+
+
+ in−1 ∂ n
+α
+1 ∂
+∂A
+= − A−
+βn
+A
++
+iγ
+1+
+∂z
+2
+n! ∂T n
+ω0 ∂T
+k≥2
+
+
+∞
+2
+× (1−fR )A|A|2 +fR A hR (τ ) |A(z, T −τ )| dτ 
+0
+
+(2)
+where α is the attenuation constant, and βn are the higher order
+dispersion coefficients obtained by a Taylor series expansion of
+
+(7)
+In the symmetric split-step Fourier method, the solution to
+(3) over a step h is approximated by
+ z+h
+
+
+
+
+h
+N̂ (z  )dz  
+D̂ exp 
+A(z + h, T ) = exp
+2
+z
+
+× exp
+
+
+
+
+h
+D̂ A(z, T )
+2
+
+(8)
+
+where the exponential dispersion operator is conveniently
+evaluated in the Fourier domain through the use of the FFT.
+Since the dispersion and nonlinear operators do not commute,
+in general, the solution (8) is only an approximation to the
+exact solution, with a global error that is second-order in the
+step size O(h2 ). Many different approaches in approximating
+the nonlinear term, which are described by the integral in the
+middle exponential, have been reported. The simplest consists
+of approximating it with exp(hN̂ ), which will henceforward
+
+Authorized licensed use limited to: Max-Planck-Institut für die Physik des Lichts. Downloaded on October 25,2025 at 00:24:50 UTC from IEEE Xplore. Restrictions apply.
+
+3772
+
+JOURNAL OF LIGHTWAVE TECHNOLOGY, VOL. 25, NO. 12, DECEMBER 2007
+
+be referred to as the symmetric split-step method [8]. Secondand fourth-order Runge–Kutta methods (symmetric split-step
+RK2 and symmetric split-step RK4, respectively) [9]–[11], as
+well as an implicit scheme (symmetric split-step Agrawal) [6],
+have also been employed.
+Simpler schemes are the split-step and reduced split-step
+methods [8], which rely on approximating (3) with A(z +
+h, T ) = exp(hD̂) exp(hN̂ )A(z, T ), leading to a global error
+that is only first order in the step size O(h). It is also possible
+to construct higher order split-step schemes by various forms
+of extrapolation [8], [12], [22]. One popular scheme is the one
+introduced by Blow and Wood [12], in which four forward
+steps of length h are taken, followed by one backward step
+of length 2h, and then four more forward steps of length h,
+which leads to a globally fourth-order accurate scheme O(h4 ).
+Implementations of this scheme with propagation using the
+simple split-step, symmetric split-step RK2, and symmetric
+split-step RK4 methods, respectively, will here be referred to as
+the Blow–Wood SS, Blow–Wood RK2, and Blow–Wood RK4
+methods. It should be noted that none of the aforementioned
+Fourier split-step schemes can posses a global accuracy exceeding that of the numerical scheme used to integrate the nonlinear
+term, as will be apparent later on.
+D. Fourth-Order Runge–Kutta in the
+Interaction Picture Method
+In the RK4IP method, the NLSE is transformed into an
+interaction picture in order to separate the effect of dispersion
+contained in D̂ from the nondispersive terms in N̂ . This allows
+the use of explicit techniques to put the solution forward.
+Field envelope A is transformed into the interaction picture
+representation AI by
+AI = exp −(z − z  )D̂ A
+
+(9)
+
+where z  is the separation distance between the interaction and
+normal pictures. Differentiating (9) gives the evolution of AI
+∂AI
+= N̂I AI
+∂z
+
+(10)
+
+where
+N̂I = exp −(z − z  )D̂ N̂ exp (z − z  )D̂
+
+(11)
+
+is the nonlinear operator in the interaction picture. The differential equation (10) can now be solved by using conventional
+explicit schemes such as Runge–Kutta methods, as the stiff
+linear parts of the PDE (3) have now been ameliorated by
+moving into the interaction picture.
+A straightforward solution of (10), which employs a fourthorder Runge–Kutta method, with the exponential operators
+evaluated in the frequency domain, would require 16 FFTs per
+step. The use of the RK4IP algorithm, however, reduces by half
+the required number of FFTs [13]. This is achieved by choosing
+the step midpoint as the separation distance z  = z + h/2,
+which eliminates the dispersion exponentials in (11) for the two
+midpoint trajectories k2 (12c) and k3 (12d). The algorithm that
+
+advances A(z, T ) to A(z + h, T ) in a spatial step h, expressed
+in the normal picture A, is now written as
+
+
+h
+D̂ A(z, T )
+(12a)
+AI = exp
+2
+
+
+
+h
+(12b)
+D̂ hN̂ (A(z, T )) A(z, T )
+k1 = exp
+2
+k2 = hN̂ (AI + k1 /2)[AI + k1 /2]
+(12c)
++
+k
+/2)[A
++
+k
+/2]
+(12d)
+k3 = hN̂ (A
+I
+2
+I
+2
+
+
+
+
+h
+D̂ (AI + k3 )
+k4 = hN̂ exp
+2
+
+
+h
+D̂ [AI + k3 ]
+× exp
+(12e)
+2
+
+
+h
+D̂ [AI + k1 /6 + k2 /3 + k3 /3]+k4 /6.
+A(z+h, T ) = exp
+2
+(12f)
+The transformation into the normal picture (12f) introduces
+an overhead of two FFTs per step; however, this overhead
+is eliminated by keeping the last trajectory k4 (12e) in the
+normal picture. In total, each step thus requires four evaluations of the nonlinear operator N̂ and four evaluations of
+the exponential dispersion operator exp(hD̂/2), which requires
+eight FFTs. The RK4IP algorithm has a local error which is a
+fifth-order O(h5 ) and, thus, is a globally fourth-order accurate
+method O(h4 ).
+It should be noted that, in principle, higher order
+Runge–Kutta schemes could be implemented in the same fashion; however, the advantageous position of the midpoints is lost
+for higher order schemes, thus hindering any further increases
+in computational efficiency.
+III. N UMERICAL R ESULTS
+A. Second-Order Soliton
+The performance of the suggested RK4IP numerical scheme
+was first tested by considering the propagation of a secondorder soliton using the NLSE (1). Analytical solutions exist
+for the periodic evolution of such higher order solitons [6],
+which constitute ideal test cases. An anomalous fiber with
+β2 = −0.01 ps2 · m−1 and γ = 0.01 W−1 · m−1 was employed
+to study soliton propagation. The initial pulse corresponding
+to a second-order soliton with an intensity full-width at halfmaximum (FWHM) pulselength √
+of TFWHM = 100 fs under
+these conditions was A(0, T ) = P0 sech(T /T0 ), where the
+peak power P0 = 2√2 |β2 |/γT02 = 1.24 kW, and the width T0 =
+TFWHM /2 ln(1 + 2) = 56.7 fs. The corresponding soliton
+period was 0.506 m, and the field envelope A was discretized
+into N = 212 temporal gridpoints.
+In order to compare the performance of different numerical schemes, the average relative intensity error ε, which is
+defined by
+
+N  comp 2
+2
+
+| − |Atrue
+k | /N
+k=1 |Ak
+(13)
+ε=
+max (|Atrue |2 )
+after one soliton period was used. In (13), N is the number of
+temporal grid points, Atrue
+is the analytical expression for the
+k
+
+Authorized licensed use limited to: Max-Planck-Institut für die Physik des Lichts. Downloaded on October 25,2025 at 00:24:50 UTC from IEEE Xplore. Restrictions apply.
+
+HULT: FOURTH-ORDER RUNGE–KUTTA IN THE INTERACTION PICTURE METHOD
+
+3773
+
+TABLE I
+FIBER PARAMETERS FOR PCF USED IN THE SIMULATION OF
+SUPERCONTINUUM GENERATION
+
+Fig. 1. Average relative error versus the number of computational steps for
+the propagation of a second-order soliton over one soliton period.
+
+field envelope of the second-order soliton at grid point k, and
+is the calculated result at the same grid point.
+Acomp
+k
+The error ε for the RK4IP method as a function of the number
+of computational steps Nsteps employed is shown in Fig. 1,
+with a logarithmic scale on both axes. The errors obtained using
+the split-step methods listed in Section II-C are also shown for
+comparison.
+The most accurate methods are the RK4IP and Blow–Wood
+RK4 methods, which both exhibit an asymptotic slope of −4
+and, thus, a global fourth-order accuracy, until the machine
+accuracy is reached at ε ≈ 10−10 . The two other implementations of the Blow–Wood scheme are seen to perform much
+worse, with a third-order accuracy for the Blow–Wood RK2
+method and a second-order accuracy for the Blow–Wood SS
+method. In these two cases, the theoretical accuracy of the
+operator-splitting scheme is not realized as they are limited
+by the accuracy of the schemes that are used to integrate the
+nonlinear terms. Of all the symmetric split-step methods, the
+best performance is achieved using the implicit symmetric splitstep Agrawal method, which asymptotically exhibits a secondorder accuracy just like the symmetric split-step RK2 and
+symmetric split-step RK4 methods, but with a higher accuracy
+for large step sizes. The symmetric split-step method, which
+uses the crudest approximation of the nonlinear term, on the
+other hand, only achieves first-order accuracy. A curiosity is
+that both the simple split-step methods achieve second-order
+accuracy for the case of the simple nonlinearity iγ|A|2 of the
+NLSE (1), whereas in the general case, they are only first-order
+accurate [8].
+B. Supercontinuum Generation
+To examine the performance of the suggested RK4IP numerical scheme for simulations of broadband supercontinuum generation, a typical problem from the literature is now considered
+using the GNLSE (2). The exact fiber and laser parameters for
+this problem were taken from Dudley and Coen [19], and these
+parameters represent typical experimental conditions for supercontinuum generation in PCFs employing femtosecond lasers
+and pumping in the anomalous dispersion regime. The initial
+pulse that is used in the simulations has a hyperbolic secant
+
+√
+profile A(0, T ) = P0 sech(T /T0 ), where the peak power P0
+is 10 kW, and the width T0 is 28.4 fs, which corresponds to
+an intensity FWHM of 50 fs. The pulse is initially centered
+at 850 nm. The relevant fiber parameters, which represent a
+PCF or a tapered fiber, are shown in Table I. The soliton order
+for these conditions is around five. For the simulation of the
+supercontinuum, N = 213 time and frequency discretization
+points were employed.
+The spectral evolution of the supercontinuum pulse at discrete locations along the fiber is shown in Fig. 2(a). Much
+more closely spaced spectra are also shown on a density plot in
+Fig. 2(b), where the spectral intensity is shown on a logarithmic
+density scale, which is truncated at −40 dB relative to the
+peak value. Dramatic spectral broadening is seen to already
+take place in the first centimeter of the fiber. This initial broadening, which is caused by the interaction between SPM and
+group-velocity dispersion, is symmetric. The spectrum quickly
+becomes asymmetric, and distinct spectral peaks develop on
+both sides of the pump wavelength as higher order dispersive
+and nonlinear perturbations cause the fission of the higher
+order soliton. The resulting fundamental solitons then undergo
+a continuous self-frequency shifting to longer wavelengths
+because of intrapulse Raman scattering. The emergence and
+self-shifting of one of these fundamental solitons on the longwavelength side is clearly shown in Fig. 2(b). In this process,
+each Raman soliton sheds some of its energy in the form of
+a dispersive wave on the short-wavelength side of the pump,
+which also leads to the appearance of discrete spectral components in this region of the spectrum. The type of dynamics
+that is observed here is typical of supercontinua generated using
+ultrashort pulses in the anomalous dispersion regime of a highly
+nonlinear fiber [2], [6].
+The numerical performance of the RK4IP scheme is now
+compared with the conventional schemes, in the same way
+as the case of the aforementioned second-order soliton. For
+the calculation of the average relative error ε at the end of
+the fiber (z = 10 cm), a reference supercontinuum trace that
+is calculated at the highest precision employed here (RK4IP
+method; Nsteps = 316 228) was used for Atrue in (13). It was
+verified that the use of reference supercontinuum traces that
+are calculated at the same precision using the slit-step Fourier
+schemes yielded the same result.
+The results of this comparison are shown in Fig. 3, where
+the error ε, as a function of the number of computational steps
+
+Authorized licensed use limited to: Max-Planck-Institut für die Physik des Lichts. Downloaded on October 25,2025 at 00:24:50 UTC from IEEE Xplore. Restrictions apply.
+
+3774
+
+JOURNAL OF LIGHTWAVE TECHNOLOGY, VOL. 25, NO. 12, DECEMBER 2007
+
+Fig. 3. Average relative error versus the number of computational steps for
+the generation of broadband supercontinuum radiation in a PCF.
+
+Fig. 4. Average relative error versus the computational time (normalized
+with the time required to calculate one FFT) for the generation of broadband
+supercontinuum radiation in a PCF.
+Fig. 2. Results from a numerical simulation of supercontinuum generation in
+a PCF. The spectral evolution as a function of the propagation distance is shown
+as (a) individual spectra and (b) intensity density plot.
+
+Nsteps employed, is plotted. The RK4IP method also exhibits
+the best performance for this more challenging problem and
+only requires about half the number of steps compared to the
+best of the competing schemes (Blow–Wood RK4). It exhibits
+the expected fourth-order accuracy over most of the span,
+with the numerical accuracy limit reached at ε ≈ 10−8 . The
+Blow–Wood schemes again achieve first-, third-, and fourthorder accuracies for the Blow–Wood SS, Blow–Wood RK2, and
+Blow–Wood RK4 methods, respectively. Because of the poor
+accuracy at large step sizes, however, the overall difference in
+performance between the latter two is small. The symmetric
+split-step methods are all observed to be second-order accurate,
+except for the simplest symmetric split-step method, which
+is only first-order, and all yield very similar results. Thus,
+at the higher levels of precision required for supercontinuum
+simulations, they cannot compete with the RK4IP method. For
+the more complex nonlinearity that is currently encountered, the
+two simple split-step methods exhibit the expected first-order
+accuracy and yield inferior results.
+
+As each tested method requires different numbers of FFTs
+and also different numbers of evaluations of the nonlinear operator per computational step, it is also of interest to consider the
+relative error as a function of computational effort, as is done
+in Fig. 4. Here, computational time has been normalized with
+the time required to evaluate one FFT. In the current implementation and for the present problem which was discretized into
+N = 213 gridpoints, each evaluation of the nonlinear operator
+(7) takes about five times longer than the time required to
+evaluate a single FFT. It should be noted that this ratio will vary
+with the number of employed gridpoints N .
+The tolerated relative error strongly depends on the nature
+of the problem that is being studied. For the type of supercontinuum process that is simulated here, relative errors of 10−3
+or smaller are required to numerically achieve stable results
+that are adequate for studying the physics of the process or
+for comparison with experimental results. In Fig. 4, the RK4IP
+algorithm offers the highest computational efficiency when the
+demands on accuracy are very high. However, even at the level
+of accuracy that is sufficient for studies of supercontinuum
+generation, the RK4IP method favorably compares with most of
+the other methods. It is as computationally efficient as the best
+
+Authorized licensed use limited to: Max-Planck-Institut für die Physik des Lichts. Downloaded on October 25,2025 at 00:24:50 UTC from IEEE Xplore. Restrictions apply.
+
+HULT: FOURTH-ORDER RUNGE–KUTTA IN THE INTERACTION PICTURE METHOD
+
+competing scheme (the symmetric split-step RK2 method) and
+is two to four times faster than most methods that are commonly
+employed for this purpose. The versatility of the RK4IP method
+is clear from the fact that it consistently exhibits good computational efficiency over a range of relative errors spanning almost
+six orders of magnitude, which makes it applicable to the study
+of a wide range of problems.
+Finally, it is worth pointing out that, whereas fixed step sizes
+have been employed in all the simulations that are presented
+here, it is possible to implement an adaptive step-size selection
+with all the methods described in order to further minimize the
+computational effort [23]. The use of such adaptive step-size
+selection can also act to mitigate problems of spurious fourwave mixing, which are associated with the use of very large
+fixed step sizes [24], [25]. In the simulations presented here,
+such spurious four-wave mixing was observed in some cases,
+but its effect was negligible as the intensity of those four-wave
+mixing peaks was much weaker (typically < 50 dB) than the
+real spectral features.
+IV. C ONCLUSION
+In this paper, an efficient method for the numerical solutions
+of the normal or general NLSEs that are used to describe pulse
+propagation in optical fibers is described. The RK4IP algorithm
+that is employed here was originally developed for numerical solutions of the time-dependent Gross–Pitaevskii equation,
+which is used to describe Bose–Einstein condensates. In this
+method, the problem is transformed into an interaction picture,
+which allows the use of conventional explicit techniques to
+put the solution forward. A highly efficient implementation is
+achieved by employing a fourth-order Runge–Kutta technique
+for stepping and by making an appropriate choice of separation
+between the normal and interaction pictures. The resulting
+method is easy to implement and exhibits a fourth-order global
+accuracy.
+The performance of the RK4IP method was compared to a
+number of implementations of the split-step method by modeling both the propagation of a second-order soliton and the generation of supercontinuum radiation. The RK4IP method was
+observed to be globally fourth-order accurate for both problems
+studied. For the simulation of supercontinuum generation, it
+was also observed to be the most accurate of the methods tested.
+R EFERENCES
+[1] The Supercontinuum Laser Source, 2nd ed. A. Alfano, Ed. New York:
+Springer-Verlag, 2006.
+[2] J. M. Dudley, G. Genty, and S. Coen, “Supercontinuum generation in
+photonic crystal fiber,” Rev. Mod. Phys., vol. 78, no. 4, pp. 1135–1184,
+Oct./Dec. 2006.
+[3] J. K. Ranka, R. S. Windeler, and A. J. Stentz, “Visible continuum generation in air–silica microstructure optical fibers with anomalous dispersion
+at 800 nm,” Opt. Lett., vol. 25, no. 1, pp. 25–27, Jan. 2000.
+[4] T. A. Bartels, K. L. Corwin, N. R. Newbury, L. Hollberg, S. A. Diddams,
+J. W. Nicholson, and M. F. Yan, “420-MHz Cr:forsterite femtosecond ring
+laser and continuum generation in the 1–2-µm range,” Opt. Lett., vol. 28,
+no. 15, pp. 1368–1370, Aug. 2003.
+[5] C. Lin and R. H. Stolen, “New nanosecond continuum for excited-state
+spectroscopy,” Appl. Phys. Lett., vol. 28, no. 4, pp. 216–218, Feb. 1976.
+[6] G. P. Agrawal, Nonlinear Fiber Optics, 4th ed. San Diego, CA:
+Academic, 2007.
+
+3775
+
+[7] J. W. Nicholson, A. K. Abeeluck, C. Headley, M. F. Yan, and
+C. G. Jørgensen, “Pulsed and continuous-wave supercontinuum generation in highly nonlinear dispersion-shifted fibers,” Appl. Phys. B, Photophys. Laser Chem., vol. 77, no. 2/3, pp. 211–218, Sep. 2003.
+[8] T. Hohage and F. Schmidt, “On the numerical solution of nonlinear
+Schrödinger type equations in fiber optics,” Konrad-Zuse-Zentrum für
+Informationstechnik, Berlin, Germany, Tech. Rep. ZIB-Report 02-04,
+Jan. 2002.
+[9] W. H. Reeves, D. V. Skyabin, F. Biancalana, J. C. Knight, F. G. Omenetto,
+A. Efimov, and A. J. Taylor, “Transformation and control of ultra-short
+pulses in dispersion-engineered photonic crystal fibres,” Nature, vol. 424,
+no. 6948, pp. 511–515, Jul. 2003.
+[10] K. M. Hillingsøe, H. N. Paulsen, J. Thøgersen, S. R. Keiding, and
+J. J. Larsen, “Initial steps of supercontinuum generation in photonic crystal fibers,” J. Opt. Soc. Amer. B, Opt. Phys., vol. 20, no. 9, pp. 1887–1893,
+Sep. 2003.
+[11] T. H. Z. Siederdissen, N. C. Nielsen, J. Kuhl, and H. Giessen, “Influence
+of near-resonant self-phase modulation on pulse propagation in semiconductors,” J. Opt. Soc. Amer. B, Opt. Phys., vol. 23, no. 7, pp. 1360–1370,
+Jul. 2006.
+[12] K. J. Blow and D. Wood, “Theoretical description of transient stimulated
+Raman scattering in optical fibers,” IEEE J. Quantum Electron., vol. 25,
+no. 12, pp. 2665–2673, Dec. 1989.
+[13] B. M. Caradoc-Davies, “Vortex dynamics in Bose–Einstein condensates,”
+Ph.D. dissertation, Univ. Otago, Dunedin, New Zealand, 2000. [Online].
+Available: http://www.physics.otago.ac.nz/bec2/bmcd/phdthesis/
+[14] C. M. Savage, N. P. Robins, and J. J. Hope, “Bose–Einstein condensate
+collapse: A comparison between theory and experiment,” Phys. Rev. A,
+Gen. Phys., vol. 67, no. 1, p. 014 304, Jan. 2003.
+[15] W. Wüster, J. J. Hope, and C. M. Savage, “Collapsing Bose–Einstein
+condensates beyond the Gross–Pitaevskii approximation,” Phys. Rev. A,
+Gen. Phys., vol. 71, no. 3, p. 033 604, Mar. 2005.
+[16] R. G. Scott, C. W. Gardiner, and D. A. W. Hutchinson, “Nonequilibrium
+dynamics: Studies of the reflection of Bose–Einstein condensates,” Laser
+Phys., vol. 17, no. 4, pp. 527–532, Apr. 2007.
+[17] V. E. Zakharov and A. B. Shabat, “Exact theory of two-dimensional
+self-focusing and one-dimensional self-modulation of waves in nonlinear
+media,” Sov. Phys.—JETP, vol. 34, no. 1, pp. 62–69, 1972.
+[18] Y. Kodoma and A. Hasegawa, “Nonlinear pulse propagation in a
+monomode dielectric guide,” IEEE J. Quantum Electron., vol. QE-23,
+no. 5, pp. 510–524, May 1987.
+[19] J. M. Dudley and S. Coen, “Numerical simulations and coherence properties of supercontinuum generation in photonic crystal and tapered optical
+fibers,” IEEE J. Sel. Topics Quantum Electron., vol. 8, no. 3, pp. 651–659,
+May/Jun. 2002.
+[20] R. H. Stolen, J. P. Gordon, W. J. Tomlinson, and H. A. Haus, “Raman
+response function of silica-core fibers,” J. Opt. Soc. Amer. B, Opt. Phys.,
+vol. 6, no. 6, pp. 1159–1166, Jun. 1989.
+[21] D. Hollenbeck and C. D. Cantrell, “Multiple-vibrational-mode model for
+fiber-optic Raman gain spectrum and response function,” J. Opt. Soc.
+Amer. B, Opt. Phys., vol. 19, no. 12, pp. 2886–2892, Dec. 2002.
+[22] G. M. Muslu and H. A. Erbay, “Higher-order split-step Fourier schemes
+for the generalized nonlinear Schrödinger equation,” Math. Comput.
+Simul., vol. 67, no. 6, pp. 581–595, Jan. 2005.
+[23] O. V. Sinkin, R. Holzlöhner, J. Zweck, and C. R. Menyuk, “Optimization
+of the split-step Fourier method in modeling optical-fiber communications
+systems,” J. Lightw. Technol., vol. 21, no. 1, pp. 61–68, Jan. 2003.
+[24] F. Matera, A. Mecozzi, M. Romagnoli, and M. Settembre, “Sideband instability induced by periodic power variation in long-distance fiber links,”
+Opt. Lett., vol. 18, no. 18, pp. 1499–1501, Sep. 1993.
+[25] G. Bosco, A. Carena, V. Curri, R. Gaudino, P. Poggiolini, and
+S. Benedetto, “Suppression of spurious tones induced by the split-step
+method in fiber systems simulation,” IEEE Photon. Technol. Lett., vol. 12,
+no. 5, pp. 489–491, May 2000.
+
+Johan Hult received the M.Sc. and Ph.D. degrees in engineering physics from
+Lund University, Lund, Sweden, in 1998 and 2002, respectively.
+He is currently an EPSRC Advanced Research Fellow with the Department
+of Chemical Engineering, University of Cambridge, Cambridge, U.K., where
+he joined as a Marie Curie Research Fellow in 2002. He is also the holder
+of a Senior Research Fellowship with Magdalene College, Cambridge. His
+research interests include atomic and molecular laser spectroscopy, reactive
+flow diagnostics, development of novel laser-based sensors, supercontinuum
+generation, and applications of supercontinuum light sources.
+
+Authorized licensed use limited to: Max-Planck-Institut für die Physik des Lichts. Downloaded on October 25,2025 at 00:24:50 UTC from IEEE Xplore. Restrictions apply.
+
+

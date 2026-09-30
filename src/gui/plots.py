@@ -51,14 +51,15 @@ class DensityMapWidget(QWidget):
 
         # Colorbar
         self.colorbar = pg.ColorBarItem(
-            values=(-40, 0),
+            values=(-40.0, 0.0),
             colorMap=colormap_name,
             label=cbar_label,
-            limits=(-80, 0),
+            limits=(-80.0, 0.0),
             rounding=1,
             orientation="horizontal",
         )
         self.colorbar.setImageItem(self.img_item, insert_in=self.plot_item)
+        self.colorbar.setLevels((-40.0, 0.0))
 
         layout.addWidget(self.plot_widget)
 
@@ -289,7 +290,8 @@ def spectrum_to_db(
     """Calculate normalized spectral density in dB vs wavelength in nm with Jacobian correction.
 
     Uses physically clamped wavelength array to strictly compute Jacobian 2*pi*c / lambda^2
-    over valid optical wavelengths.
+    over valid optical wavelengths. Exact normalization:
+    psd_db = 10.0 * np.log10((psd_lambda + 1e-30) / (np.max(psd_lambda) + 1e-30))
     """
     wl_nm, sort_idx = envelope_to_wavelength_nm(
         omega_grid, omega0, wl_min_nm=wl_min_nm, wl_max_nm=wl_max_nm
@@ -304,13 +306,6 @@ def spectrum_to_db(
     jacobian = 2.0 * np.pi * C_LIGHT / (wl_m**2)
 
     psd_lambda = np.abs(a_w[sort_idx]) ** 2 * jacobian
-    max_val = np.max(psd_lambda)
-    if max_val > 0:
-        psd_db = 10.0 * np.log10(np.maximum(psd_lambda / max_val, 10 ** (db_floor / 10.0)))
-    else:
-        psd_db = np.full_like(psd_lambda, db_floor)
-
-    if resolution_nm is not None and resolution_nm > 0.0:
-        psd_db = smooth_spectrum_osa(wl_nm, psd_db, resolution_nm=resolution_nm, db_floor=db_floor)
+    psd_db = 10.0 * np.log10((psd_lambda + 1e-30) / (np.max(psd_lambda) + 1e-30))
 
     return wl_nm, psd_db

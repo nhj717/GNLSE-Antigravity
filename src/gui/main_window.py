@@ -255,6 +255,8 @@ class MainWindow(QMainWindow):
         self._cleanup_thread()
 
     def _cleanup_thread(self) -> None:
+        if self.worker:
+            self.worker.abort()
         if self.worker_thread and self.worker_thread.isRunning():
             self.worker_thread.quit()
             if not self.worker_thread.wait(2000):
@@ -265,7 +267,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         """Cooperative teardown: cleanly abort thread on window close."""
-        if self.worker and self.worker.is_running:
+        if self.worker:
             self.worker.abort()
         self._cleanup_thread()
         event.accept()

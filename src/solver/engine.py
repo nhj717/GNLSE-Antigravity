@@ -95,6 +95,7 @@ def step_rk4ip(
     raman_fft: Optional[np.ndarray],
     raman_fr: float,
     filter_window: Optional[np.ndarray] = None,
+    dt: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Execute a single step h using RK4IP (Hult 2007, Eq. 12).
 
@@ -104,28 +105,28 @@ def step_rk4ip(
 
     # 1. Interaction picture midpoint field A_I
     a_i_w = exp_half_d * a_w
-    a_i = np.fft.ifft(a_i_w)
+    a_i = np.fft.fft(a_i_w)
 
     # 2. Stage k1 = exp(h/2 * D) * [h * N(A)]
-    m1_w = compute_nonlinear_operator(a_t, gamma, shock_factor, raman_fft, raman_fr)
+    m1_w = compute_nonlinear_operator(a_t, gamma, shock_factor, raman_fft, raman_fr, dt)
     k1_w = h * exp_half_d * m1_w
-    k1 = np.fft.ifft(k1_w)
+    k1 = np.fft.fft(k1_w)
 
     # 3. Stage k2 = h * N(A_I + k1 / 2)
     u2 = a_i + 0.5 * k1
-    m2_w = compute_nonlinear_operator(u2, gamma, shock_factor, raman_fft, raman_fr)
+    m2_w = compute_nonlinear_operator(u2, gamma, shock_factor, raman_fft, raman_fr, dt)
     k2_w = h * m2_w
-    k2 = np.fft.ifft(k2_w)
+    k2 = np.fft.fft(k2_w)
 
     # 4. Stage k3 = h * N(A_I + k2 / 2)
     u3 = a_i + 0.5 * k2
-    m3_w = compute_nonlinear_operator(u3, gamma, shock_factor, raman_fft, raman_fr)
+    m3_w = compute_nonlinear_operator(u3, gamma, shock_factor, raman_fft, raman_fr, dt)
     k3_w = h * m3_w
 
     # 5. Stage k4 = h * N(exp(h/2 * D) * [A_I + k3])
     u4_prop_w = exp_half_d * (a_i_w + k3_w)
-    u4_prop = np.fft.ifft(u4_prop_w)
-    m4_w = compute_nonlinear_operator(u4_prop, gamma, shock_factor, raman_fft, raman_fr)
+    u4_prop = np.fft.fft(u4_prop_w)
+    m4_w = compute_nonlinear_operator(u4_prop, gamma, shock_factor, raman_fft, raman_fr, dt)
     k4_w = h * m4_w
 
     # 6. Assembly in frequency domain:
@@ -136,7 +137,7 @@ def step_rk4ip(
     if filter_window is not None:
         a_next_w = a_next_w * filter_window
 
-    a_next_t = np.fft.ifft(a_next_w)
+    a_next_t = np.fft.fft(a_next_w)
     return a_next_t, a_next_w
 
 
@@ -150,23 +151,24 @@ def step_sssfm(
     raman_fft: Optional[np.ndarray],
     raman_fr: float,
     filter_window: Optional[np.ndarray] = None,
+    dt: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Execute a single step h using Symmetrized Split-Step Fourier Method (S-SSFM)."""
     exp_half_d = np.exp(0.5 * h * d_omega)
 
     # First half dispersive step
     a_mid_w = exp_half_d * a_w
-    a_mid = np.fft.ifft(a_mid_w)
+    a_mid = np.fft.fft(a_mid_w)
 
     # Nonlinear step
     if raman_fr <= 0.0 and (shock_factor is None or np.allclose(shock_factor, 1.0)):
         # Pure Kerr: exact phase rotation in time domain
         nl_phase = gamma * (np.abs(a_mid) ** 2) * h
         a_nl = a_mid * np.exp(1j * nl_phase)
-        a_nl_w = np.fft.fft(a_nl)
+        a_nl_w = np.fft.ifft(a_nl)
     else:
         # Full GNLSE nonlinear operator evaluated in frequency domain
-        n_w = compute_nonlinear_operator(a_mid, gamma, shock_factor, raman_fft, raman_fr)
+        n_w = compute_nonlinear_operator(a_mid, gamma, shock_factor, raman_fft, raman_fr, dt)
         a_nl_w = a_mid_w + h * n_w
 
     # Second half dispersive step
@@ -175,7 +177,7 @@ def step_sssfm(
     if filter_window is not None:
         a_next_w = a_next_w * filter_window
 
-    a_next_t = np.fft.ifft(a_next_w)
+    a_next_t = np.fft.fft(a_next_w)
     return a_next_t, a_next_w
 
 
@@ -189,27 +191,28 @@ def step_ssfm(
     raman_fft: Optional[np.ndarray],
     raman_fr: float,
     filter_window: Optional[np.ndarray] = None,
+    dt: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Execute a single step h using standard asymmetric Split-Step Fourier Method (SSFM)."""
     exp_d = np.exp(h * d_omega)
 
     # Dispersive step
     a_disp_w = exp_d * a_w
-    a_disp = np.fft.ifft(a_disp_w)
+    a_disp = np.fft.fft(a_disp_w)
 
     # Nonlinear step
     if raman_fr <= 0.0 and (shock_factor is None or np.allclose(shock_factor, 1.0)):
         nl_phase = gamma * (np.abs(a_disp) ** 2) * h
         a_next_t = a_disp * np.exp(1j * nl_phase)
-        a_next_w = np.fft.fft(a_next_t)
+        a_next_w = np.fft.ifft(a_next_t)
     else:
-        n_w = compute_nonlinear_operator(a_disp, gamma, shock_factor, raman_fft, raman_fr)
+        n_w = compute_nonlinear_operator(a_disp, gamma, shock_factor, raman_fft, raman_fr, dt)
         a_next_w = a_disp_w + h * n_w
-        a_next_t = np.fft.ifft(a_next_w)
+        a_next_t = np.fft.fft(a_next_w)
 
     if filter_window is not None:
         a_next_w = a_next_w * filter_window
-        a_next_t = np.fft.ifft(a_next_w)
+        a_next_t = np.fft.fft(a_next_w)
 
     return a_next_t, a_next_w
 
@@ -347,7 +350,7 @@ def _solve_spectrum_vs_distance(
 
     # Initial optical pulse field
     a_t = generate_initial_pulse(pulse, t)
-    a_w = np.fft.fft(a_t)
+    a_w = np.fft.ifft(a_t)
 
     # Baseline conservation quantities at z = 0
     e_0 = compute_energy(a_t, dt)
@@ -399,6 +402,7 @@ def _solve_spectrum_vs_distance(
                 raman_fft,
                 raman_fr,
                 filter_window,
+                dt=dt,
             )
             z += current_h
             step_count += 1
@@ -417,6 +421,7 @@ def _solve_spectrum_vs_distance(
                 raman_fft,
                 raman_fr,
                 None,
+                dt=dt,
             )
 
             # 2. Fine step: two steps of size h / 2
@@ -431,6 +436,7 @@ def _solve_spectrum_vs_distance(
                 raman_fft,
                 raman_fr,
                 None,
+                dt=dt,
             )
             a_f_t, a_f_w = stepper_fn(
                 a_m_t,
@@ -442,6 +448,7 @@ def _solve_spectrum_vs_distance(
                 raman_fft,
                 raman_fr,
                 None,
+                dt=dt,
             )
 
             # 3. Relative local error norm delta = ||A_fine - A_coarse|| / ||A_fine||
@@ -452,7 +459,7 @@ def _solve_spectrum_vs_distance(
                 # Step Accepted
                 if filter_window is not None:
                     a_f_w = a_f_w * filter_window
-                    a_f_t = np.fft.ifft(a_f_w)
+                    a_f_t = np.fft.fft(a_f_w)
                 z += current_h
                 a_t = a_f_t
                 a_w = a_f_w
@@ -484,7 +491,7 @@ def _solve_spectrum_vs_distance(
                         )
                         if filter_window is not None:
                             a_f_w = a_f_w * filter_window
-                            a_f_t = np.fft.ifft(a_f_w)
+                            a_f_t = np.fft.fft(a_f_w)
                         z += current_h
                         a_t = a_f_t
                         a_w = a_f_w

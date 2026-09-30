@@ -52,10 +52,15 @@ class SolverWorker(QObject):
         self._fiber = fiber
         self._solver = solver
         self._display_live = display_live
+        self._is_interrupted.clear()
+        self._is_paused.set()
 
     @pyqtSlot()
     def start(self) -> None:
         """Entry slot executed directly inside the target QThread event loop."""
+        if self._is_interrupted.is_set():
+            self.simulation_aborted.emit()
+            return
         if self._pulse is not None and self._fiber is not None and self._solver is not None:
             self.run_simulation(self._pulse, self._fiber, self._solver, self._display_live)
 
@@ -88,9 +93,11 @@ class SolverWorker(QObject):
         display_live: bool = True,
     ) -> None:
         """Execute simulation generator loop."""
+        if self._is_interrupted.is_set():
+            self.simulation_aborted.emit()
+            self._running = False
+            return
         self._running = True
-        self._is_interrupted.clear()
-        self._is_paused.set()
 
         self.throttler.display_live = display_live
         self.throttler.reset()

@@ -224,7 +224,8 @@ def test_wavelength_clamping_and_jacobian():
     assert len(s_wl) == len(wl_nm)
     np.testing.assert_array_equal(s_wl, wl_nm)
     assert pytest.approx(np.max(psd_db), abs=1e-10) == 0.0
-    assert np.all(psd_db >= -200.0)
+    assert np.all(np.isfinite(psd_db))
+    assert np.all(psd_db <= 1e-10)
 
 
 def test_osa_resolution_smoothing():

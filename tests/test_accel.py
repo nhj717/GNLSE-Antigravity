@@ -24,7 +24,7 @@ def test_rk4ip_c_equivalence():
     np.random.seed(12345)
     n = 1024
     at = np.random.randn(n) + 1j * np.random.randn(n)
-    aw = np.fft.fft(at)
+    aw = np.fft.ifft(at)
     d_omega = -1j * np.linspace(-1e12, 1e12, n) ** 2 * 1e-26
     shock = np.linspace(0.85, 1.15, n)
     r_fft = np.random.randn(n) + 1j * np.random.randn(n)
@@ -48,7 +48,7 @@ def test_sssfm_c_equivalence():
     np.random.seed(54321)
     n = 1024
     at = np.random.randn(n) + 1j * np.random.randn(n)
-    aw = np.fft.fft(at)
+    aw = np.fft.ifft(at)
     d_omega = -1j * np.linspace(-1e12, 1e12, n) ** 2 * 1e-26
     shock = np.ones(n)
 
