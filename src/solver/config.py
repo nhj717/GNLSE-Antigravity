@@ -369,7 +369,7 @@ class SolverConfig:
     power_max: float = 1000.0  # W
     power_steps: int = 50
     z_records: Optional[int] = None
-    filter_alias: bool = False
+    filter_alias: bool = True
     filter_order: int = 20
     filter_cutoff: float = 0.95
     raman_enabled: bool = True

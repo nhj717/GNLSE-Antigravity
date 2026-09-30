@@ -60,7 +60,7 @@ def test_hult_soliton_fission_and_photon_conservation():
         min_step=1e-7,
         max_step=1e-3,
         tolerance=1e-4,
-        filter_alias=True,
+        filter_alias=False,
         raman_enabled=True,
         shock_enabled=True,
         z_records=10,

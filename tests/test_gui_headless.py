@@ -497,3 +497,130 @@ def test_mainwindow_simulation_initialization_error(qtbot, monkeypatch):
     assert "Simulation Initialization Error" in errors[0][0]
     assert "Status: Error" in window.lbl_status.text()
     assert window.tab_controls.btn_run.isEnabled() is True
+
+
+def test_results_frequency_and_time_synchronization(qtbot):
+    """Verify Ticket B1 & B3: 1D and 2D frequency plots have identical X limits, and time plots default to [-2.5, 2.5] ps."""
+    from src.gui.tab_results import TabResultsWidget
+    results = TabResultsWidget()
+    qtbot.addWidget(results)
+
+    # Verify default colormap is turbo
+    assert results.combo_cmap.currentText() == "turbo"
+
+    # Verify default frequency x-axis bounds on both 1D and 2D widgets
+    assert pytest.approx(results.spin_wl_min.value()) == 500.0
+    assert pytest.approx(results.spin_wl_max.value()) == 1200.0
+    freq_1d_range = results.plot_freq_1d.get_x_range()
+    freq_2d_range = results.plot_freq_2d.get_x_range()
+    assert pytest.approx(freq_1d_range[0]) == 500.0
+    assert pytest.approx(freq_1d_range[1]) == 1200.0
+    assert pytest.approx(freq_2d_range[0]) == 500.0
+    assert pytest.approx(freq_2d_range[1]) == 1200.0
+
+    # Verify default time domain view range [-2.5, 2.5] ps
+    time_1d_range = results.plot_time_1d.get_x_range()
+    time_2d_range = results.plot_time_2d.get_x_range()
+    assert pytest.approx(time_1d_range[0]) == -2.5
+    assert pytest.approx(time_1d_range[1]) == 2.5
+    assert pytest.approx(time_2d_range[0]) == -2.5
+    assert pytest.approx(time_2d_range[1]) == 2.5
+
+
+def test_spinbox_adjustments_synchronize_1d_and_2d(qtbot):
+    """Verify Ticket B1 & B2: adjusting spinbox bounds updates 1D and 2D widgets simultaneously and interactive 2D updates."""
+    from src.gui.tab_results import TabResultsWidget
+    results = TabResultsWidget()
+    qtbot.addWidget(results)
+
+    # Adjust spinboxes to custom window [650, 1050] nm
+    results.spin_wl_min.setValue(650.0)
+    results.spin_wl_max.setValue(1050.0)
+
+    # Verify both 1D and 2D widgets updated simultaneously
+    assert pytest.approx(results.plot_freq_1d.get_x_range()) == (650.0, 1050.0)
+    assert pytest.approx(results.plot_freq_2d.get_x_range()) == (650.0, 1050.0)
+
+    # Click Hult Window button
+    results.btn_hult_window.click()
+    assert pytest.approx(results.spin_wl_min.value()) == 500.0
+    assert pytest.approx(results.spin_wl_max.value()) == 1200.0
+    assert pytest.approx(results.plot_freq_1d.get_x_range()) == (500.0, 1200.0)
+    assert pytest.approx(results.plot_freq_2d.get_x_range()) == (500.0, 1200.0)
+
+    # Test interactive 2D colormap update with simulated history
+    N = 256
+    t = np.linspace(-5e-12, 5e-12, N)
+    omega = 2.0 * np.pi * np.fft.fftfreq(N, d=(t[1] - t[0]))
+    a_t = np.exp(-0.5 * (t / 1e-12) ** 2).astype(np.complex128)
+    a_w = np.fft.fft(a_t)
+    s1 = SimulationState(step=0, z=0.0, power=1.0, h=0.01, t=t, omega=omega, a_t=a_t, a_w=a_w, rel_energy_err=0.0, rel_photon_err=0.0)
+    s2 = SimulationState(step=1, z=0.05, power=1.0, h=0.01, t=t, omega=omega, a_t=a_t, a_w=a_w, rel_energy_err=0.0, rel_photon_err=0.0)
+    
+    results.prepare_for_simulation(s1, "RK4IP", center_wavelength=850e-9)
+    results.render_full_simulation(s2, [s1, s2])
+
+    # Interactively change wavelength window
+    results.spin_wl_min.setValue(700.0)
+    results.spin_wl_max.setValue(950.0)
+    rect = results.plot_freq_2d.img_item.mapRectToParent(results.plot_freq_2d.img_item.boundingRect())
+    assert pytest.approx(rect.left()) == 700.0
+    assert pytest.approx(rect.right()) == 950.0
+    assert pytest.approx(results.plot_freq_1d.get_x_range()) == (700.0, 950.0)
+    assert pytest.approx(results.plot_freq_2d.get_x_range()) == (700.0, 950.0)
+
+
+def test_osa_resolution_dropdown_smoothing(qtbot):
+    """Verify Ticket B2: OSA resolution dropdown applies smoothing cleanly without errors and preserves raw data."""
+    from src.gui.tab_results import TabResultsWidget
+    results = TabResultsWidget()
+    qtbot.addWidget(results)
+
+    # Verify OSA dropdown initial state
+    assert results.combo_osa.currentText() == "1.0 nm (Default)"
+    assert results._get_active_osa_res() == 1.0
+
+    # Setup state with structured spectrum
+    N = 512
+    t = np.linspace(-5e-12, 5e-12, N)
+    omega = 2.0 * np.pi * np.fft.fftfreq(N, d=(t[1] - t[0]))
+    # Pulse with modulation to produce fringes
+    a_t = (np.exp(-0.5 * (t / 0.5e-12) ** 2) + 0.5 * np.exp(-0.5 * ((t - 1e-12) / 0.3e-12) ** 2)).astype(np.complex128)
+    a_w = np.fft.fft(a_t)
+    s1 = SimulationState(step=0, z=0.0, power=1.0, h=0.01, t=t, omega=omega, a_t=a_t, a_w=a_w, rel_energy_err=0.0, rel_photon_err=0.0)
+    s2 = SimulationState(step=1, z=0.1, power=1.0, h=0.01, t=t, omega=omega, a_t=a_t, a_w=a_w, rel_energy_err=0.0, rel_photon_err=0.0)
+
+    results.prepare_for_simulation(s1, "RK4IP", center_wavelength=850e-9)
+    results.render_full_simulation(s2, [s1, s2])
+
+    # Switch to Raw (No filter)
+    results.combo_osa.setCurrentText("Raw (No filter)")
+    assert results._get_active_osa_res() == 0.0
+    _, y_raw = results.plot_freq_1d.curve_after.getData()
+
+    # Switch to 0.5 nm
+    results.combo_osa.setCurrentText("0.5 nm")
+    assert results._get_active_osa_res() == 0.5
+    _, y_05 = results.plot_freq_1d.curve_after.getData()
+
+    # Switch to 1.0 nm
+    results.combo_osa.setCurrentText("1.0 nm (Default)")
+    assert results._get_active_osa_res() == 1.0
+    _, y_10 = results.plot_freq_1d.curve_after.getData()
+
+    # Switch to 2.0 nm
+    results.combo_osa.setCurrentText("2.0 nm")
+    assert results._get_active_osa_res() == 2.0
+    _, y_20 = results.plot_freq_1d.curve_after.getData()
+
+    # Verify total variation (high-frequency ripple) monotonically decreases with stronger smoothing
+    tv_raw = np.sum(np.abs(np.diff(y_raw)))
+    tv_05 = np.sum(np.abs(np.diff(y_05)))
+    tv_10 = np.sum(np.abs(np.diff(y_10)))
+    tv_20 = np.sum(np.abs(np.diff(y_20)))
+    assert tv_raw >= tv_05 >= tv_10 >= tv_20
+
+    # Switch back to Raw and verify original raw data is intact (no degradation)
+    results.combo_osa.setCurrentText("Raw (No filter)")
+    _, y_restored = results.plot_freq_1d.curve_after.getData()
+    np.testing.assert_allclose(y_raw, y_restored, rtol=1e-10)

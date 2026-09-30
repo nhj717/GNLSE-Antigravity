@@ -25,6 +25,11 @@ from src.solver.engine import (
     generate_initial_pulse,
     solve_generator,
 )
+from src.gui.plots import (
+    envelope_to_wavelength_nm,
+    spectrum_to_db,
+    smooth_spectrum_osa,
+)
 
 
 def test_dispersion_import_csv(tmp_path):
@@ -186,4 +191,91 @@ def test_config_serialization_round_trip():
     states = list(solve_generator(deserialized_pulse, deserialized_fiber, deserialized_solver))
     assert len(states) >= 2
     assert pytest.approx(states[-1].z, abs=1e-6) == 0.1
+
+
+def test_wavelength_clamping_and_jacobian():
+    """Verify physical optical wavelength clamping to [300, 2500] nm and Jacobian calculation."""
+    c_light = 299792458.0
+    lambda0 = 850e-9
+    omega0 = 2.0 * math.pi * c_light / lambda0
+    
+    # Create frequency grid spanning large range including DC singularity and negative total frequencies
+    omega_grid = np.linspace(-3.0 * omega0, 3.0 * omega0, 4096)
+    
+    wl_nm, sort_idx = envelope_to_wavelength_nm(omega_grid, omega0)
+    
+    # 1. Clamping bounds check: strictly inside [300, 2500] nm
+    assert len(wl_nm) > 0
+    assert np.all(wl_nm >= 300.0)
+    assert np.all(wl_nm <= 2500.0)
+    
+    # 2. Monotonicity check
+    assert np.all(np.diff(wl_nm) > 0)
+    
+    # 3. Index alignment check
+    omega_total = omega0 + omega_grid[sort_idx]
+    expected_wl_nm = (2.0 * math.pi * c_light / omega_total) * 1e9
+    np.testing.assert_allclose(wl_nm, expected_wl_nm, rtol=1e-12)
+    
+    # 4. spectrum_to_db check
+    a_w = np.exp(-((omega_grid) / 1e13)**2)  # Gaussian envelope
+    s_wl, psd_db = spectrum_to_db(a_w, omega_grid, omega0)
+    
+    assert len(s_wl) == len(wl_nm)
+    np.testing.assert_array_equal(s_wl, wl_nm)
+    assert pytest.approx(np.max(psd_db), abs=1e-10) == 0.0
+    assert np.all(psd_db >= -200.0)
+
+
+def test_osa_resolution_smoothing():
+    """Verify OSA resolution bandwidth Gaussian smoothing."""
+    # Monotonically increasing wavelength grid
+    wl_nm = np.linspace(500.0, 1000.0, 1001)  # d_lambda = 0.5 nm
+    
+    # Delta-like impulse at 750 nm
+    psd_db = np.full_like(wl_nm, -100.0)
+    peak_idx = 500  # wl_nm[500] == 750.0 nm
+    psd_db[peak_idx] = 0.0
+    
+    # 1. Bypass when resolution <= 0
+    bypass = smooth_spectrum_osa(wl_nm, psd_db, resolution_nm=0.0)
+    np.testing.assert_array_equal(bypass, psd_db)
+    
+    # 2. Smoothing with 5.0 nm resolution FWHM
+    res_fwhm = 5.0
+    smoothed = smooth_spectrum_osa(wl_nm, psd_db, resolution_nm=res_fwhm, db_floor=-100.0)
+    
+    # Peak must remain at index 500 and normalized to 0 dB
+    assert np.argmax(smoothed) == peak_idx
+    assert pytest.approx(np.max(smoothed), abs=1e-10) == 0.0
+    
+    # At half-width point (750 +- 2.5 nm, i.e. +- 5 indices), power should drop by ~3 dB
+    assert pytest.approx(smoothed[peak_idx - 5], abs=0.25) == -3.01
+    assert pytest.approx(smoothed[peak_idx + 5], abs=0.25) == -3.01
+    
+    # 3. Edge cases: empty array and 1-element array
+    empty = np.array([])
+    np.testing.assert_array_equal(smooth_spectrum_osa(empty, empty), empty)
+    single = np.array([0.0])
+    np.testing.assert_array_equal(smooth_spectrum_osa(single, single), single)
+
+
+def test_solver_config_filter_alias_default():
+    """Verify filter_alias defaults to True in SolverConfig."""
+    cfg = SolverConfig()
+    assert cfg.filter_alias is True
+
+
+def test_relative_error_si_scaling():
+    """Verify relative_error computes true relative drift for small SI quantities (e.g. photon action ~1e-40)."""
+    # Exact division for small non-zero numbers
+    val0 = 1.0e-40
+    val1 = 1.01e-40
+    err = relative_error(val1, val0)
+    assert pytest.approx(err, rel=1e-6) == 0.01
+
+    # Exact zero denominator falls back to absolute difference
+    assert relative_error(5.0e-5, 0.0) == 5.0e-5
+
+
 

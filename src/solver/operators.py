@@ -279,6 +279,7 @@ def compute_photon_number(
 def relative_error(current: float, initial: float) -> float:
     """Compute relative conservation drift |current - initial| / |initial|."""
     denom = abs(initial)
-    if denom < 1e-30:
+    if denom == 0.0:
         return abs(current - initial)
     return abs(current - initial) / denom
+

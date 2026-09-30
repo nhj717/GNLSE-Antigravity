@@ -25,7 +25,13 @@ from PyQt6.QtWidgets import (
 )
 
 from src.solver.config import SimulationState
-from .plots import DensityMapWidget, LinePlotWidget, envelope_to_time_ps, spectrum_to_db
+from .plots import (
+    DensityMapWidget,
+    LinePlotWidget,
+    envelope_to_time_ps,
+    spectrum_to_db,
+    smooth_spectrum_osa,
+)
 
 
 class TabResultsWidget(QWidget):
@@ -38,8 +44,13 @@ class TabResultsWidget(QWidget):
         self.cached_history: List[SimulationState] = []
         self.cached_final_state: Optional[SimulationState] = None
         self.initial_state: Optional[SimulationState] = None
+        self.raw_wl_before: Optional[np.ndarray] = None
+        self.raw_psd_before: Optional[np.ndarray] = None
+        self.raw_wl_after: Optional[np.ndarray] = None
+        self.raw_psd_after: Optional[np.ndarray] = None
         self.center_wavelength: float = 1550e-9
         self.omega0: float = 2.0 * np.pi * 299792458.0 / self.center_wavelength
+        self.MAX_DISPLAY_BINS: int = 1024
 
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(6, 6, 6, 6)
@@ -55,8 +66,8 @@ class TabResultsWidget(QWidget):
         # Colormap dropdown
         header_bar.addWidget(QLabel("Colormap:"))
         self.combo_cmap = QComboBox()
-        self.combo_cmap.addItems(["viridis", "inferno", "magma", "plasma", "jet"])
-        self.combo_cmap.setCurrentText("viridis")
+        self.combo_cmap.addItems(["turbo", "viridis", "inferno", "magma", "plasma", "jet"])
+        self.combo_cmap.setCurrentText("turbo")
         self.combo_cmap.currentTextChanged.connect(self._on_cmap_changed)
         header_bar.addWidget(self.combo_cmap)
 
@@ -93,7 +104,7 @@ class TabResultsWidget(QWidget):
             x_label="Time [ps]",
             y_label="Distance [cm]",
             cbar_label="Normalized Intensity [dB]",
-            colormap_name="inferno",
+            colormap_name="turbo",
         )
         # Top-Right: Freq 2D
         self.plot_freq_2d = DensityMapWidget(
@@ -101,7 +112,7 @@ class TabResultsWidget(QWidget):
             x_label="Wavelength [nm]",
             y_label="Distance [cm]",
             cbar_label="Normalized Spectral Density [dB]",
-            colormap_name="inferno",
+            colormap_name="turbo",
         )
         # Bottom-Left: Time 1D
         self.plot_time_1d = LinePlotWidget(
@@ -116,7 +127,10 @@ class TabResultsWidget(QWidget):
             y_label="Spectral Power [dB]",
         )
 
-        
+        # Default view range [-2.5, 2.5] ps for time domain
+        self.plot_time_1d.set_x_range(-2.5, 2.5)
+        self.plot_time_2d.set_x_range(-2.5, 2.5)
+
         # Wavelength Window Control Toolbar for 1D Freq Plot
         self.wl_toolbar = QHBoxLayout()
         self.wl_toolbar.setContentsMargins(4, 0, 4, 0)
@@ -124,20 +138,29 @@ class TabResultsWidget(QWidget):
         
         self.spin_wl_min = QDoubleSpinBox()
         self.spin_wl_min.setRange(100.0, 5000.0)
-        self.spin_wl_min.setValue(400.0)
+        self.spin_wl_min.setValue(500.0)
         self.spin_wl_min.setDecimals(1)
         
         self.spin_wl_max = QDoubleSpinBox()
         self.spin_wl_max.setRange(100.0, 5000.0)
-        self.spin_wl_max.setValue(1600.0)
+        self.spin_wl_max.setValue(1200.0)
         self.spin_wl_max.setDecimals(1)
         
         self.btn_wl_reset = QPushButton("Reset Fit")
-        
+        self.btn_hult_window = QPushButton("🎯 Hult Window (500–1200 nm)")
+
+        # OSA Resolution (Smoothing) dropdown
+        self.combo_osa = QComboBox()
+        self.combo_osa.addItems(["Raw (No filter)", "0.5 nm", "1.0 nm (Default)", "2.0 nm"])
+        self.combo_osa.setCurrentIndex(2)
+
         self.wl_toolbar.addWidget(self.spin_wl_min)
         self.wl_toolbar.addWidget(QLabel("to"))
         self.wl_toolbar.addWidget(self.spin_wl_max)
         self.wl_toolbar.addWidget(self.btn_wl_reset)
+        self.wl_toolbar.addWidget(self.btn_hult_window)
+        self.wl_toolbar.addWidget(QLabel("OSA Resolution:"))
+        self.wl_toolbar.addWidget(self.combo_osa)
         self.wl_toolbar.addStretch()
         
         # Add toolbar to the LinePlotWidget's vertical layout
@@ -146,6 +169,8 @@ class TabResultsWidget(QWidget):
         self.spin_wl_min.valueChanged.connect(self._on_wl_range_changed)
         self.spin_wl_max.valueChanged.connect(self._on_wl_range_changed)
         self.btn_wl_reset.clicked.connect(self._on_wl_reset_clicked)
+        self.btn_hult_window.clicked.connect(self._on_hult_window_clicked)
+        self.combo_osa.currentIndexChanged.connect(self._on_osa_resolution_changed)
         
         # apply initial range
         self._on_wl_range_changed()
@@ -223,6 +248,8 @@ class TabResultsWidget(QWidget):
         self.initial_state = initial_state
         self.cached_history = []
         self.cached_final_state = None
+        self.raw_wl_after = None
+        self.raw_psd_after = None
         if center_wavelength is not None:
             self.set_center_wavelength(center_wavelength)
 
@@ -234,20 +261,34 @@ class TabResultsWidget(QWidget):
         intensity_0 = np.abs(initial_state.a_t) ** 2
         self.plot_time_1d.set_before_curve(t_ps, intensity_0)
 
+        # Optimize time domain view range to [-2.5, 2.5] ps
+        self.plot_time_1d.set_x_range(-2.5, 2.5)
+        self.plot_time_2d.set_x_range(-2.5, 2.5)
+
         # Center frequency omega0
         wl_nm, psd_db = spectrum_to_db(initial_state.a_w, initial_state.omega, self.omega0, db_floor=-200.0)
-        self.plot_freq_1d.set_before_curve(wl_nm, psd_db)
+        self.raw_wl_before = wl_nm
+        self.raw_psd_before = psd_db
+
+        res = self._get_active_osa_res()
+        psd_db_smooth = smooth_spectrum_osa(wl_nm, psd_db, resolution_nm=res)
+        self.plot_freq_1d.set_before_curve(wl_nm, psd_db_smooth)
 
         # -----------------------------
         # Live 2D Colormap Initialization
         # -----------------------------
-        self.MAX_DISPLAY_BINS = 1024
+        self.MAX_DISPLAY_BINS = getattr(self, "MAX_DISPLAY_BINS", 1024)
+        wl_min = self.spin_wl_min.value()
+        wl_max = self.spin_wl_max.value()
         
-        N_pts_time = len(t_ps)
-        N_pts_freq = min(len(wl_nm), self.MAX_DISPLAY_BINS)
-        
-        self.display_wl = np.linspace(wl_nm[0], wl_nm[-1], N_pts_freq)
+        self.display_wl = np.linspace(wl_min, wl_max, self.MAX_DISPLAY_BINS)
         self.display_t = t_ps
+
+        self.plot_freq_1d.set_x_range(wl_min, wl_max)
+        self.plot_freq_2d.set_x_range(wl_min, wl_max)
+
+        N_pts_time = len(t_ps)
+        N_pts_freq = len(self.display_wl)
 
         MAX_STEPS = 5000
         self.live_time_map = np.full((MAX_STEPS, N_pts_time), -40.0)
@@ -262,7 +303,12 @@ class TabResultsWidget(QWidget):
         self.plot_time_1d.set_after_curve(t_ps, intensity)
 
         wl_nm, psd_db = spectrum_to_db(state.a_w, state.omega, self.omega0, db_floor=-200.0)
-        self.plot_freq_1d.set_after_curve(wl_nm, psd_db)
+        self.raw_wl_after = wl_nm
+        self.raw_psd_after = psd_db
+
+        res = self._get_active_osa_res()
+        psd_db_smooth = smooth_spectrum_osa(wl_nm, psd_db, resolution_nm=res)
+        self.plot_freq_1d.set_after_curve(wl_nm, psd_db_smooth)
 
         # Update Live 2D Map
         if self.live_step_idx < self.live_time_map.shape[0]:
@@ -273,8 +319,9 @@ class TabResultsWidget(QWidget):
             if max_int > 0:
                 self.live_time_map[idx, :] = 10.0 * np.log10(np.maximum(intensity / max_int, 1e-4))
             
-            # Freq map interpolated
-            self.live_freq_map[idx, :] = np.interp(self.display_wl, wl_nm, psd_db)
+            # Freq map interpolated into self.display_wl (strictly bounded between wl_min and wl_max)
+            s_wl_nm, s_db = spectrum_to_db(state.a_w, state.omega, self.omega0, db_floor=-40.0)
+            self.live_freq_map[idx, :] = np.interp(self.display_wl, s_wl_nm, s_db)
             
             if self.current_sim_type == "spectrum_vs_distance":
                 self.live_y_coords[idx] = state.z * 100.0
@@ -284,8 +331,10 @@ class TabResultsWidget(QWidget):
             y_min = float(self.live_y_coords[0])
             y_max = float(self.live_y_coords[idx]) if self.live_y_coords[idx] > y_min else y_min + 1.0
             
+            wl_min = float(self.display_wl[0])
+            wl_max = float(self.display_wl[-1])
             # Update density widgets
-            self.plot_freq_2d.update_data(self.live_freq_map[:idx+1, :], (float(self.display_wl[0]), float(self.display_wl[-1])), (y_min, y_max))
+            self.plot_freq_2d.update_data(self.live_freq_map[:idx+1, :], (wl_min, wl_max), (y_min, y_max))
             
             if self.current_sim_type == "spectrum_vs_distance":
                 self.plot_time_2d.update_data(self.live_time_map[:idx+1, :], (float(t_ps[0]), float(t_ps[-1])), (y_min, y_max))
@@ -299,13 +348,14 @@ class TabResultsWidget(QWidget):
         if not history:
             return
 
+        wl_min = self.spin_wl_min.value()
+        wl_max = self.spin_wl_max.value()
         N_steps = len(history)
-        wl_nm, _ = spectrum_to_db(history[0].a_w, history[0].omega, self.omega0)
         t_ps = envelope_to_time_ps(history[0].t)
         
         N_pts_time = len(t_ps)
-        N_pts_freq = min(len(wl_nm), getattr(self, 'MAX_DISPLAY_BINS', 1024))
-        display_wl = np.linspace(wl_nm[0], wl_nm[-1], N_pts_freq)
+        N_pts_freq = getattr(self, "MAX_DISPLAY_BINS", 1024)
+        self.display_wl = np.linspace(wl_min, wl_max, N_pts_freq)
 
         time_map_db = np.zeros((N_steps, N_pts_time))
         spec_map_db = np.zeros((N_steps, N_pts_freq))
@@ -322,7 +372,7 @@ class TabResultsWidget(QWidget):
 
             # Spectrum in dB
             s_wl_nm, s_db = spectrum_to_db(s.a_w, s.omega, self.omega0, db_floor=-40.0)
-            spec_map_db[i, :] = np.interp(display_wl, s_wl_nm, s_db)
+            spec_map_db[i, :] = np.interp(self.display_wl, s_wl_nm, s_db)
 
             if self.current_sim_type == "spectrum_vs_distance":
                 y_coords[i] = s.z * 100.0  # m to cm
@@ -333,7 +383,9 @@ class TabResultsWidget(QWidget):
         y_max = float(y_coords[-1]) if y_coords[-1] > y_min else y_min + 1.0
 
         # Render 2D Freq map
-        self.plot_freq_2d.update_data(spec_map_db, (float(display_wl[0]), float(display_wl[-1])), (y_min, y_max))
+        self.plot_freq_2d.update_data(spec_map_db, (wl_min, wl_max), (y_min, y_max))
+        self.plot_freq_2d.set_x_range(wl_min, wl_max)
+        self.plot_freq_1d.set_x_range(wl_min, wl_max)
 
         # Render 2D Time map if distance mode
         if self.current_sim_type == "spectrum_vs_distance":
@@ -344,8 +396,14 @@ class TabResultsWidget(QWidget):
         t_ps_final = envelope_to_time_ps(final_state.t)
         intensity_final = np.abs(final_state.a_t) ** 2
         self.plot_time_1d.set_after_curve(t_ps_final, intensity_final)
+        
         wl_nm_final, psd_db_final = spectrum_to_db(final_state.a_w, final_state.omega, self.omega0, db_floor=-200.0)
-        self.plot_freq_1d.set_after_curve(wl_nm_final, psd_db_final)
+        self.raw_wl_after = wl_nm_final
+        self.raw_psd_after = psd_db_final
+
+        res = self._get_active_osa_res()
+        psd_db_smooth = smooth_spectrum_osa(wl_nm_final, psd_db_final, resolution_nm=res)
+        self.plot_freq_1d.set_after_curve(wl_nm_final, psd_db_smooth)
 
     def _on_cmap_changed(self, cmap_name: str) -> None:
         self.plot_time_2d.set_colormap(cmap_name)
@@ -449,15 +507,68 @@ class TabResultsWidget(QWidget):
 
 
 
-    def _on_wl_range_changed(self):
+    def _get_active_osa_res(self) -> float:
+        """Parse active OSA resolution bandwidth in nm from combo selection."""
+        text = self.combo_osa.currentText()
+        if "0.5" in text:
+            return 0.5
+        elif "1.0" in text:
+            return 1.0
+        elif "2.0" in text:
+            return 2.0
+        return 0.0
+
+    def _on_osa_resolution_changed(self) -> None:
+        """Re-apply OSA resolution smoothing to cached 1D before and after curves."""
+        res = self._get_active_osa_res()
+        if self.raw_wl_before is not None and self.raw_psd_before is not None:
+            smooth_before = smooth_spectrum_osa(self.raw_wl_before, self.raw_psd_before, resolution_nm=res)
+            self.plot_freq_1d.set_before_curve(self.raw_wl_before, smooth_before)
+        if self.raw_wl_after is not None and self.raw_psd_after is not None:
+            smooth_after = smooth_spectrum_osa(self.raw_wl_after, self.raw_psd_after, resolution_nm=res)
+            self.plot_freq_1d.set_after_curve(self.raw_wl_after, smooth_after)
+
+    def _on_hult_window_clicked(self) -> None:
+        """Reset wavelength range spinboxes to Hult benchmark window [500, 1200] nm."""
+        self.spin_wl_min.setValue(500.0)
+        self.spin_wl_max.setValue(1200.0)
+        self._on_wl_range_changed()
+
+    def _on_wl_range_changed(self) -> None:
         wl_min = self.spin_wl_min.value()
         wl_max = self.spin_wl_max.value()
-        if hasattr(self.plot_freq_1d, 'set_x_range'):
+        if wl_min >= wl_max:
+            return
+
+        if hasattr(self.plot_freq_1d, "set_x_range"):
             self.plot_freq_1d.set_x_range(wl_min, wl_max)
-            
-    def _on_wl_reset_clicked(self):
-        if hasattr(self.plot_freq_1d, 'plot_item'):
-            self.plot_freq_1d.plot_item.enableAutoRange(axis='x')
+        if hasattr(self.plot_freq_2d, "set_x_range"):
+            self.plot_freq_2d.set_x_range(wl_min, wl_max)
+
+        self.MAX_DISPLAY_BINS = getattr(self, "MAX_DISPLAY_BINS", 1024)
+        self.display_wl = np.linspace(wl_min, wl_max, self.MAX_DISPLAY_BINS)
+
+        if self.cached_history and self.cached_final_state is not None:
+            N_steps = len(self.cached_history)
+            spec_map_db = np.zeros((N_steps, len(self.display_wl)))
+            y_coords = np.zeros(N_steps)
+            for i, s in enumerate(self.cached_history):
+                s_wl_nm, s_db = spectrum_to_db(s.a_w, s.omega, self.omega0, db_floor=-40.0)
+                spec_map_db[i, :] = np.interp(self.display_wl, s_wl_nm, s_db)
+                if self.current_sim_type == "spectrum_vs_distance":
+                    y_coords[i] = s.z * 100.0
+                else:
+                    y_coords[i] = s.power / 1e3
+
+            y_min = float(y_coords[0])
+            y_max = float(y_coords[-1]) if y_coords[-1] > y_min else y_min + 1.0
+            self.plot_freq_2d.update_data(spec_map_db, (wl_min, wl_max), (y_min, y_max))
+
+    def _on_wl_reset_clicked(self) -> None:
+        if hasattr(self.plot_freq_1d, "plot_item"):
+            self.plot_freq_1d.plot_item.enableAutoRange(axis="x")
+        if hasattr(self.plot_freq_2d, "plot_item"):
+            self.plot_freq_2d.plot_item.enableAutoRange(axis="x")
 
     def _on_export_clicked(self) -> None:
         """Export publication figure snapshot or raw simulation dataset."""
