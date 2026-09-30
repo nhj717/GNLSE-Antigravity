@@ -1,0 +1,14 @@
+# Core numerical and scientific libraries
+numpy>=1.26.0
+scipy>=1.12.0
+h5py>=3.10.0
+
+# GUI and plotting
+PyQt6>=6.6.0
+pyqtgraph>=0.13.0
+matplotlib>=3.8.0
+
+# Testing suite (optional for running tests)
+pytest>=8.0.0
+pytest-qt>=4.4.0
+pytest-cov>=5.0.0
