@@ -1,0 +1,187 @@
+{
+  "metadata": {
+    "description": "GNLSE Benchmark Parameters for Validation Testing",
+    "created": "2025-09-29",
+    "updated": "2025-09-29",
+    "sources": [
+      "Agrawal, Nonlinear Fiber Optics, 5th Ed., 2012",
+      "Dudley, Genty, Coen, RMP 78(4), 1135-1184, 2006",
+      "Blow and Wood, IEEE JQE 25(12), 2665-2673, 1989",
+      "Stolen et al., JOSA B 6(6), 1159-1166, 1989",
+      "Johan Hult, J. Lightwave Technol. 25(12), 3770-3775, 2007 (Primary Milestone Paper)"
+    ]
+  },
+  "physical_constants": {
+    "c": {"value": 299792458, "unit": "m/s", "description": "Speed of light in vacuum"},
+    "n2_silica": {"value": 2.6e-20, "unit": "m^2/W", "description": "Nonlinear refractive index of fused silica"},
+    "f_R": {"value": 0.18, "unit": "dimensionless", "description": "Fractional Raman contribution"},
+    "tau_1": {"value": 12.2e-15, "unit": "s", "description": "Raman oscillation timescale"},
+    "tau_2": {"value": 32.0e-15, "unit": "s", "description": "Raman damping timescale"}
+  },
+  "milestone_case_hult_2007_scg": {
+    "name": "Supercontinuum Generation in PCF — Hult (2007) RK4IP Benchmark Milestone",
+    "description": "Primary validation milestone directly replicating Figure 2(b) of Johan Hult's seminal 2007 paper introducing RK4IP for GNLSE.",
+    "literature_source": {
+      "author": "Johan Hult",
+      "title": "A Fourth-Order Runge–Kutta in the Interaction Picture Method for Simulating Supercontinuum Generation in Optical Fibers",
+      "journal": "Journal of Lightwave Technology",
+      "volume": 25,
+      "number": 12,
+      "pages": "3770-3775",
+      "year": 2007,
+      "doi": "10.1109/JLT.2007.909373",
+      "reference_figures": {
+        "fig2b_2d_density_map": "reference_data/figures/ref_hult_2007_fig2b_density_map.png",
+        "fig2a_spectral_slices": "reference_data/figures/ref_hult_2007_fig2a_spectra.png",
+        "fig2_full": "reference_data/figures/ref_hult_2007_fig2_spectral_evolution.png",
+        "table1_parameters": "reference_data/figures/ref_hult_2007_table1_parameters.png"
+      }
+    },
+    "fiber": {
+      "type": "Photonic Crystal Fiber (PCF)",
+      "lambda_0": {"value": 850e-9, "unit": "m", "conventional": "850 nm"},
+      "omega_0": {"value": 2.2176e15, "unit": "rad/s"},
+      "gamma": {"value": 0.045, "unit": "1/(W*m)", "conventional": "45 W^-1 km^-1"},
+      "alpha": {"value": 0.0, "unit": "1/m", "note": "Lossless for short 10 cm propagation"},
+      "dispersion_coefficients_SI": {
+        "beta_2": {"value": -1.276e-26, "unit": "s^2/m"},
+        "beta_3": {"value": 8.119e-41, "unit": "s^3/m"},
+        "beta_4": {"value": -1.321e-55, "unit": "s^4/m"},
+        "beta_5": {"value": 3.032e-70, "unit": "s^5/m"},
+        "beta_6": {"value": -4.196e-85, "unit": "s^6/m"},
+        "beta_7": {"value": 2.570e-100, "unit": "s^7/m"}
+      },
+      "dispersion_coefficients_Hult_Table_I": {
+        "beta_2": "-1.276e-2 ps^2/m",
+        "beta_3": "8.119e-5 ps^3/m",
+        "beta_4": "-1.321e-7 ps^4/m",
+        "beta_5": "3.032e-10 ps^5/m",
+        "beta_6": "-4.196e-13 ps^6/m",
+        "beta_7": "2.570e-16 ps^7/m"
+      }
+    },
+    "pulse": {
+      "shape": "sech",
+      "formula": "A(0,T) = sqrt(P0) * sech(T/T0)",
+      "T_FWHM": {"value": 50.0e-15, "unit": "s", "conventional": "50 fs"},
+      "T0": {"value": 28.4e-15, "unit": "s", "conventional": "28.4 fs"},
+      "P0": {"value": 10000.0, "unit": "W", "conventional": "10 kW"},
+      "center_wavelength_nm": 850.0,
+      "chirp": 0
+    },
+    "derived_quantities": {
+      "soliton_number_N": {"value": 5.33, "formula": "sqrt(gamma * P0 * T0^2 / |beta_2|)"},
+      "dispersion_length_LD": {"value": 0.0632, "unit": "m", "formula": "T0^2 / |beta_2|"},
+      "nonlinear_length_LNL": {"value": 0.00222, "unit": "m", "formula": "1 / (gamma * P0)"},
+      "fission_length_Lfiss": {"value": 0.0118, "unit": "m", "formula": "LD / N"}
+    },
+    "propagation": {
+      "total_length": {"value": 0.10, "unit": "m", "conventional": "10 cm"},
+      "nonlinear_effects": "Full GNLSE: Kerr + Raman (f_R=0.18) + self-steepening (tau_shock=1/omega_0) + dispersion to beta_7"
+    },
+    "grid": {
+      "N": 8192,
+      "T_max": {"value": 12.5e-12, "unit": "s", "conventional": "12.5 ps"},
+      "note": "N=2^13 points exactly as specified by Hult (2007) Section III-B"
+    },
+    "validation_criteria": {
+      "2d_map_comparison": "Direct feature-by-feature match with Hult Fig. 2(b) intensity density plot over [500, 1200] nm and [0, 10] cm on [-40, 0] dB log scale",
+      "soliton_fission_onset": "Initial symmetric SPM broadening in first 1 cm, fission onset around z ~ 1.2 - 1.5 cm",
+      "red_shifted_raman_soliton": "Clear emergence of fundamental Raman soliton continuously self-shifting toward 1100-1150 nm at z = 10 cm",
+      "dispersive_wave_generation": "Blue-side radiation shedding energy between 550 nm and 650 nm",
+      "spectral_slices_match": "Spectra at z = 0, 1, 2, 4, 6, 8, 10 cm match Fig. 2(a)",
+      "relative_intensity_error_metric": "Hult Eq. (13): eps = (sum_k | |Ak_comp|^2 - |Ak_true|^2 | / N) / max(|A_true|^2)"
+    }
+  },
+  "test_case_1_fundamental_soliton": {
+    "name": "Fundamental Soliton N=1 in SMF-28",
+    "fiber": {
+      "type": "SMF-28",
+      "lambda_0": {"value": 1550e-9, "unit": "m"},
+      "omega_0": {"value": 1.2153e15, "unit": "rad/s"},
+      "beta_2": {"value": -2.14e-26, "unit": "s^2/m", "conventional": "-21.4 ps^2/km"},
+      "beta_3": {"value": 1.2e-40, "unit": "s^3/m", "conventional": "0.12 ps^3/km", "note": "IGNORED in this test"},
+      "gamma": {"value": 1.3e-3, "unit": "1/(W*m)", "conventional": "1.3 W^-1 km^-1"},
+      "alpha": {"value": 0.0, "unit": "1/m", "note": "Set to zero for soliton test"},
+      "A_eff": {"value": 80e-12, "unit": "m^2"}
+    },
+    "pulse": {
+      "shape": "sech",
+      "formula": "A(0,T) = sqrt(P0) * sech(T/T0)",
+      "T0": {"value": 1.0e-12, "unit": "s", "conventional": "1.0 ps"},
+      "T_FWHM": {"value": 1.763e-12, "unit": "s", "conventional": "1.763 ps"},
+      "P0": {"value": 16.46, "unit": "W", "formula": "|beta_2| / (gamma * T0^2)"},
+      "chirp": 0
+    },
+    "propagation": {
+      "soliton_period_z0": {"value": 73.39, "unit": "m", "formula": "(pi/2) * T0^2 / |beta_2|"},
+      "total_length": {"value": 366.97, "unit": "m", "description": "5 * z0"},
+      "nonlinear_effects": "Kerr only (no Raman, no self-steepening)"
+    },
+    "grid": {
+      "N": 1024,
+      "T_max": {"value": 20.0e-12, "unit": "s", "conventional": "20 ps"}
+    },
+    "validation_criteria": {
+      "temporal_shape_invariance": "max|  |A(z,T)|^2 / P0 - sech^2(T/T0)  | < 1e-4 for all z",
+      "spectral_shape_invariance": "max deviation of spectral power from initial < 1e-4",
+      "energy_conservation": "relative energy drift < 1e-10 over full propagation"
+    }
+  },
+  "test_case_2_supercontinuum": {
+    "name": "Supercontinuum Generation via Soliton Fission in PCF (Dudley RMP 2006)",
+    "fiber": {
+      "type": "Photonic Crystal Fiber",
+      "lambda_0": {"value": 835e-9, "unit": "m"},
+      "omega_0": {"value": 2.2568e15, "unit": "rad/s"},
+      "ZDW": {"value": 770e-9, "unit": "m"},
+      "gamma": {"value": 0.11, "unit": "1/(W*m)", "conventional": "110 W^-1 km^-1"},
+      "A_eff": {"value": 1.7e-12, "unit": "m^2"},
+      "alpha": {"value": 0.0, "unit": "1/m", "note": "Negligible for 15 cm propagation"},
+      "dispersion_coefficients_SI": {
+        "beta_2": {"value": -1.183e-26, "unit": "s^2/m"},
+        "beta_3": {"value": 8.10e-41, "unit": "s^3/m"},
+        "beta_4": {"value": -1.16e-55, "unit": "s^4/m"},
+        "beta_5": {"value": 2.59e-70, "unit": "s^5/m"},
+        "beta_6": {"value": 5.38e-85, "unit": "s^6/m"}
+      },
+      "dispersion_coefficients_conventional": {
+        "beta_2": "-11.83 ps^2/km",
+        "beta_3": "8.10e-2 ps^3/km",
+        "beta_4": "-1.16e-4 ps^4/km",
+        "beta_5": "2.59e-6 ps^5/km",
+        "beta_6": "5.38e-8 ps^6/km"
+      }
+    },
+    "pulse": {
+      "shape": "sech",
+      "formula": "A(0,T) = sqrt(P0) * sech(T/T0)",
+      "T_FWHM": {"value": 50.0e-15, "unit": "s", "conventional": "50 fs"},
+      "T0": {"value": 28.36e-15, "unit": "s", "conventional": "28.36 fs"},
+      "P0": {"value": 10000.0, "unit": "W", "conventional": "10 kW"},
+      "chirp": 0
+    },
+    "derived_quantities": {
+      "soliton_number_N": {"value": 8.66, "formula": "sqrt(gamma * P0 * T0^2 / |beta_2|)"},
+      "dispersion_length_LD": {"value": 0.0680, "unit": "m", "formula": "T0^2 / |beta_2|"},
+      "nonlinear_length_LNL": {"value": 9.09e-4, "unit": "m", "formula": "1 / (gamma * P0)"},
+      "fission_length_Lfiss": {"value": 0.00785, "unit": "m", "formula": "LD / N"}
+    },
+    "propagation": {
+      "total_length": {"value": 0.15, "unit": "m", "conventional": "15 cm"},
+      "nonlinear_effects": "Full GNLSE: Kerr + Raman + self-steepening + dispersion to beta_6"
+    },
+    "grid": {
+      "N": 8192,
+      "T_max": {"value": 12.5e-12, "unit": "s", "conventional": "12.5 ps"},
+      "note": "N=2^13 gives dt=1.53 fs, adequate for Raman resolution (tau_1=12.2 fs)"
+    },
+    "validation_criteria": {
+      "spectral_broadening": "Output spectrum spans approximately 400 nm to 1600+ nm",
+      "soliton_fission_location": "Fission occurs near z ~ L_fiss ~ 8 mm",
+      "dispersive_waves": "Blue-shifted dispersive wave radiation visible near 400-600 nm",
+      "raman_solitons": "Red-shifted fundamental solitons via SSFS beyond 1000 nm",
+      "photon_number_conservation": "Relative photon number drift < 1e-3 over full propagation"
+    }
+  }
+}
