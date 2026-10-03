@@ -62,6 +62,54 @@ def test_sssfm_c_equivalence():
     assert diff_w < 1e-12, f"Spectral mismatch: {diff_w:.2e}"
 
 
+def test_sssfm_c_equivalence_with_shock_and_raman():
+    """Verify compiled C S-SSFM matches pure NumPy baseline with Raman and shock active."""
+    c_sssfm = get_accel_stepper("S-SSFM")
+    assert c_sssfm is not None
+
+    np.random.seed(54321)
+    n = 1024
+    at = np.random.randn(n) + 1j * np.random.randn(n)
+    aw = np.fft.ifft(at)
+    d_omega = -1j * np.linspace(-1e12, 1e12, n) ** 2 * 1e-26
+    shock = np.linspace(0.85, 1.15, n)
+    r_fft = np.random.randn(n) + 1j * np.random.randn(n)
+    filt = np.linspace(1.0, 0.6, n)
+
+    t_py, w_py = step_sssfm(at, aw, 0.005, d_omega, 1.5e-3, shock, r_fft, 0.18, filt, dt=1.5e-15)
+    t_c, w_c = c_sssfm(at, aw, 0.005, d_omega, 1.5e-3, shock, r_fft, 0.18, filt, dt=1.5e-15)
+
+    diff_t = float(np.max(np.abs(t_py - t_c)))
+    diff_w = float(np.max(np.abs(w_py - w_c)))
+
+    assert diff_t < 1e-12, f"Temporal mismatch: {diff_t:.2e}"
+    assert diff_w < 1e-12, f"Spectral mismatch: {diff_w:.2e}"
+
+
+def test_ssfm_c_equivalence():
+    """Verify compiled C SSFM matches pure NumPy baseline with Raman and shock active."""
+    c_ssfm = get_accel_stepper("SSFM")
+    assert c_ssfm is not None
+
+    np.random.seed(13579)
+    n = 1024
+    at = np.random.randn(n) + 1j * np.random.randn(n)
+    aw = np.fft.ifft(at)
+    d_omega = -1j * np.linspace(-1e12, 1e12, n) ** 2 * 1e-26
+    shock = np.linspace(0.85, 1.15, n)
+    r_fft = np.random.randn(n) + 1j * np.random.randn(n)
+    filt = np.linspace(1.0, 0.6, n)
+
+    t_py, w_py = step_ssfm(at, aw, 0.005, d_omega, 1.5e-3, shock, r_fft, 0.18, filt, dt=1.5e-15)
+    t_c, w_c = c_ssfm(at, aw, 0.005, d_omega, 1.5e-3, shock, r_fft, 0.18, filt, dt=1.5e-15)
+
+    diff_t = float(np.max(np.abs(t_py - t_c)))
+    diff_w = float(np.max(np.abs(w_py - w_c)))
+
+    assert diff_t < 1e-12, f"Temporal mismatch: {diff_t:.2e}"
+    assert diff_w < 1e-12, f"Spectral mismatch: {diff_w:.2e}"
+
+
 def test_soliton_propagation_with_accel():
     """Verify fundamental Soliton N=1 propagation using active compiled backend."""
     pulse = PulseConfig(shape="sech", t_fwhm=1.7627e-12, p_peak=16.4615, center_wavelength=1550e-9)

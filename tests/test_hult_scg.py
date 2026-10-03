@@ -14,8 +14,9 @@ from src.solver.config import PulseConfig, FiberConfig, DispersionConfig, Solver
 from src.solver.engine import solve_generator
 
 
-def test_hult_soliton_fission_and_photon_conservation():
-    """Propagate 10 kW pulse in NL-1.7-770 PCF past fission length."""
+@pytest.mark.parametrize("method", ["RK4IP", "S-SSFM", "SSFM"])
+def test_hult_soliton_fission_and_photon_conservation(method: str):
+    """Propagate 10 kW pulse in NL-1.7-770 PCF past fission length across all solvers."""
     lambda0 = 850e-9
     gamma = 0.045
     t_fwhm = 50e-15
@@ -52,7 +53,7 @@ def test_hult_soliton_fission_and_photon_conservation():
     )
     solver = SolverConfig(
         simulation_type="spectrum_vs_distance",
-        method="RK4IP",
+        method=method,
         n_points=2048,
         time_window=6e-12,  # dt = 2.93 fs < tau1/4 = 3.05 fs
         adaptive_step=True,

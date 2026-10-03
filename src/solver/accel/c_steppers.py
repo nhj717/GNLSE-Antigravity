@@ -93,6 +93,53 @@ def step_rk4ip_c(
     return a_next_t, a_next_w
 
 
+def _c_nonlinear_step(
+    a_t: np.ndarray,
+    a_w: np.ndarray,
+    h: float,
+    gamma: float,
+    shock_factor: Optional[np.ndarray],
+    raman_fft: Optional[np.ndarray],
+    raman_fr: float,
+    dt: float = 1.0,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Execute C-accelerated nonlinear substep over step h.
+
+    - If self-steepening is OFF: evaluates exact unitary phase rotation with Raman B_eff.
+    - If self-steepening is ON: integrates d A_tilde / dz = N(A) via RK4 substeps.
+    """
+    has_shock = (shock_factor is not None) and not np.allclose(shock_factor, 1.0)
+    if not has_shock:
+        int_t = np.abs(a_t) ** 2
+        if raman_fr > 0.0 and raman_fft is not None:
+            conv = np.real(dt * sf.fft(sf.ifft(int_t) * raman_fft))
+            b_eff = (1.0 - raman_fr) * int_t + raman_fr * conv
+        else:
+            b_eff = int_t
+        phi = gamma * h * b_eff
+        a_nl_t = a_t * np.exp(1j * phi)
+        a_nl_w = sf.ifft(a_nl_t)
+        return a_nl_t, a_nl_w
+    else:
+        k1_w = h * c_nonlinear_operator(a_t, gamma, shock_factor, raman_fft, raman_fr, dt)
+
+        u2_w = a_w + 0.5 * k1_w
+        u2_t = sf.fft(u2_w)
+        k2_w = h * c_nonlinear_operator(u2_t, gamma, shock_factor, raman_fft, raman_fr, dt)
+
+        u3_w = a_w + 0.5 * k2_w
+        u3_t = sf.fft(u3_w)
+        k3_w = h * c_nonlinear_operator(u3_t, gamma, shock_factor, raman_fft, raman_fr, dt)
+
+        u4_w = a_w + k3_w
+        u4_t = sf.fft(u4_w)
+        k4_w = h * c_nonlinear_operator(u4_t, gamma, shock_factor, raman_fft, raman_fr, dt)
+
+        a_nl_w = a_w + (1.0 / 6.0) * (k1_w + 2.0 * k2_w + 2.0 * k3_w + k4_w)
+        a_nl_t = sf.fft(a_nl_w)
+        return a_nl_t, a_nl_w
+
+
 def step_sssfm_c(
     a_t: np.ndarray,
     a_w: np.ndarray,
@@ -115,14 +162,7 @@ def step_sssfm_c(
     a_half_t = sf.fft(a_half_w)
 
     # 2. Nonlinear step
-    is_pure_kerr = (raman_fr <= 0.0) and (shock_factor is None or np.allclose(shock_factor, 1.0))
-    if not is_pure_kerr:
-        m_w = c_nonlinear_operator(a_half_t, gamma, shock_factor, raman_fft, raman_fr, dt)
-        a_nl_w = a_half_w + h * m_w
-    else:
-        phi = gamma * h * (np.abs(a_half_t) ** 2)
-        a_nl_t = a_half_t * np.exp(1j * phi)
-        a_nl_w = sf.ifft(a_nl_t)
+    _, a_nl_w = _c_nonlinear_step(a_half_t, a_half_w, h, gamma, shock_factor, raman_fft, raman_fr, dt)
 
     # 3. Second half linear dispersion step
     a_next_w = np.empty(n, dtype=np.complex128)
@@ -155,15 +195,7 @@ def step_ssfm_c(
     gnlse_c_kernel.fused_linear_step(a_w, exp_d, a_disp_w)
     a_disp_t = sf.fft(a_disp_w)
 
-    is_pure_kerr = (raman_fr <= 0.0) and (shock_factor is None or np.allclose(shock_factor, 1.0))
-    if not is_pure_kerr:
-        m_w = c_nonlinear_operator(a_disp_t, gamma, shock_factor, raman_fft, raman_fr, dt)
-        a_next_w = a_disp_w + h * m_w
-        a_next_t = sf.fft(a_next_w)
-    else:
-        phi = gamma * h * (np.abs(a_disp_t) ** 2)
-        a_next_t = a_disp_t * np.exp(1j * phi)
-        a_next_w = sf.ifft(a_next_t)
+    a_next_t, a_next_w = _c_nonlinear_step(a_disp_t, a_disp_w, h, gamma, shock_factor, raman_fft, raman_fr, dt)
 
     if filter_window is not None:
         a_next_w = a_next_w * filter_window

@@ -141,6 +141,67 @@ def step_rk4ip(
     return a_next_t, a_next_w
 
 
+def _nonlinear_step_rk4(
+    a_w: np.ndarray,
+    h: float,
+    gamma: float,
+    shock_factor: Optional[np.ndarray],
+    raman_fft: Optional[np.ndarray],
+    raman_fr: float,
+    dt: float = 1.0,
+) -> np.ndarray:
+    """Evaluate nonlinear step exp(h * N) in frequency domain using 4th-order Runge-Kutta."""
+    a_t = np.fft.fft(a_w)
+    k1_w = h * compute_nonlinear_operator(a_t, gamma, shock_factor, raman_fft, raman_fr, dt)
+
+    u2_t = np.fft.fft(a_w + 0.5 * k1_w)
+    k2_w = h * compute_nonlinear_operator(u2_t, gamma, shock_factor, raman_fft, raman_fr, dt)
+
+    u3_t = np.fft.fft(a_w + 0.5 * k2_w)
+    k3_w = h * compute_nonlinear_operator(u3_t, gamma, shock_factor, raman_fft, raman_fr, dt)
+
+    u4_t = np.fft.fft(a_w + k3_w)
+    k4_w = h * compute_nonlinear_operator(u4_t, gamma, shock_factor, raman_fft, raman_fr, dt)
+
+    return a_w + (1.0 / 6.0) * (k1_w + 2.0 * k2_w + 2.0 * k3_w + k4_w)
+
+
+def _nonlinear_step(
+    a_t: np.ndarray,
+    a_w: np.ndarray,
+    h: float,
+    gamma: float,
+    shock_factor: Optional[np.ndarray],
+    raman_fft: Optional[np.ndarray],
+    raman_fr: float,
+    dt: float = 1.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Execute nonlinear substep over distance h.
+
+    - If self-steepening is OFF: evaluates exact unitary phase rotation
+      including full Raman B_eff(T), maintaining strict energy conservation without Euler amplification.
+    - If self-steepening is ON: integrates d A_tilde / dz = N(A) via RK4
+      frequency substeps for unconditional numerical stability on the imaginary axis.
+    """
+    has_shock = (shock_factor is not None) and not np.allclose(shock_factor, 1.0)
+    if not has_shock:
+        intensity = np.abs(a_t) ** 2
+        if raman_fr > 0.0 and raman_fft is not None:
+            from .raman import raman_convolution
+            i_conv = raman_convolution(intensity, raman_fft, dt)
+            b_eff = (1.0 - raman_fr) * intensity + raman_fr * i_conv
+        else:
+            b_eff = intensity
+        nl_phase = gamma * b_eff * h
+        a_nl_t = a_t * np.exp(1j * nl_phase)
+        a_nl_w = np.fft.ifft(a_nl_t)
+        return a_nl_t, a_nl_w
+    else:
+        a_nl_w = _nonlinear_step_rk4(a_w, h, gamma, shock_factor, raman_fft, raman_fr, dt)
+        a_nl_t = np.fft.fft(a_nl_w)
+        return a_nl_t, a_nl_w
+
+
 def step_sssfm(
     a_t: np.ndarray,
     a_w: np.ndarray,
@@ -157,19 +218,11 @@ def step_sssfm(
     exp_half_d = np.exp(0.5 * h * d_omega)
 
     # First half dispersive step
-    a_mid_w = exp_half_d * a_w
-    a_mid = np.fft.fft(a_mid_w)
+    a_half_w = exp_half_d * a_w
+    a_half_t = np.fft.fft(a_half_w)
 
     # Nonlinear step
-    if raman_fr <= 0.0 and (shock_factor is None or np.allclose(shock_factor, 1.0)):
-        # Pure Kerr: exact phase rotation in time domain
-        nl_phase = gamma * (np.abs(a_mid) ** 2) * h
-        a_nl = a_mid * np.exp(1j * nl_phase)
-        a_nl_w = np.fft.ifft(a_nl)
-    else:
-        # Full GNLSE nonlinear operator evaluated in frequency domain
-        n_w = compute_nonlinear_operator(a_mid, gamma, shock_factor, raman_fft, raman_fr, dt)
-        a_nl_w = a_mid_w + h * n_w
+    _, a_nl_w = _nonlinear_step(a_half_t, a_half_w, h, gamma, shock_factor, raman_fft, raman_fr, dt)
 
     # Second half dispersive step
     a_next_w = exp_half_d * a_nl_w
@@ -198,17 +251,10 @@ def step_ssfm(
 
     # Dispersive step
     a_disp_w = exp_d * a_w
-    a_disp = np.fft.fft(a_disp_w)
+    a_disp_t = np.fft.fft(a_disp_w)
 
     # Nonlinear step
-    if raman_fr <= 0.0 and (shock_factor is None or np.allclose(shock_factor, 1.0)):
-        nl_phase = gamma * (np.abs(a_disp) ** 2) * h
-        a_next_t = a_disp * np.exp(1j * nl_phase)
-        a_next_w = np.fft.ifft(a_next_t)
-    else:
-        n_w = compute_nonlinear_operator(a_disp, gamma, shock_factor, raman_fft, raman_fr, dt)
-        a_next_w = a_disp_w + h * n_w
-        a_next_t = np.fft.fft(a_next_w)
+    a_next_t, a_next_w = _nonlinear_step(a_disp_t, a_disp_w, h, gamma, shock_factor, raman_fft, raman_fr, dt)
 
     if filter_window is not None:
         a_next_w = a_next_w * filter_window
@@ -390,6 +436,14 @@ def _solve_spectrum_vs_distance(
         if z + current_h > total_length:
             current_h = total_length - z
 
+        # Bound step size by maximum allowable nonlinear phase shift (Spec §2.8 & stability controls)
+        p_peak_cur = float(np.max(np.abs(a_t) ** 2))
+        phi_max = 0.08  # rad, max nonlinear phase shift Delta phi_NL <= phi_max
+        if fiber.gamma > 0.0 and p_peak_cur > 0.0:
+            h_nl_max = phi_max / (fiber.gamma * p_peak_cur)
+            current_h = min(current_h, h_nl_max)
+            current_h = max(current_h, solver.min_step)
+
         if not solver.adaptive_step:
             # Fixed-step propagation
             a_t, a_w = stepper_fn(
@@ -404,12 +458,13 @@ def _solve_spectrum_vs_distance(
                 filter_window,
                 dt=dt,
             )
+            if np.isnan(a_t).any():
+                raise RuntimeError(f"Simulation encountered NaN at z = {z*100:.4f} cm in fixed-step mode.")
             z += current_h
             step_count += 1
             accepted = True
         else:
             # Adaptive step-doubling local error control (Spec §2.8)
-            # Evaluate substeps without filter to isolate differential equation error
             # 1. Coarse step: size h
             a_c_t, a_c_w = stepper_fn(
                 a_t,
@@ -420,7 +475,7 @@ def _solve_spectrum_vs_distance(
                 shock_factor,
                 raman_fft,
                 raman_fr,
-                None,
+                filter_window,
                 dt=dt,
             )
 
@@ -435,7 +490,7 @@ def _solve_spectrum_vs_distance(
                 shock_factor,
                 raman_fft,
                 raman_fr,
-                None,
+                filter_window,
                 dt=dt,
             )
             a_f_t, a_f_w = stepper_fn(
@@ -447,15 +502,26 @@ def _solve_spectrum_vs_distance(
                 shock_factor,
                 raman_fft,
                 raman_fr,
-                None,
+                filter_window,
                 dt=dt,
             )
 
-            # 3. Relative local error norm delta = ||A_fine - A_coarse|| / ||A_fine||
+            # 3. Anomaly detection: prevent NaNs or unphysical runaway before cascade
             norm_fine = float(np.linalg.norm(a_f_t))
-            delta = float(np.linalg.norm(a_f_t - a_c_t) / (norm_fine + 1e-30))
+            p_max_fine = float(np.max(np.abs(a_f_t) ** 2))
+            is_anomaly = (
+                not np.isfinite(norm_fine)
+                or np.isnan(a_f_t).any()
+                or np.isnan(a_c_t).any()
+                or (pulse.p_peak > 0.0 and p_max_fine > 100.0 * pulse.p_peak and p_max_fine > 1e6)
+            )
 
-            if delta <= solver.tolerance:
+            if is_anomaly:
+                delta = float("inf")
+            else:
+                delta = float(np.linalg.norm(a_f_t - a_c_t) / (norm_fine + 1e-30))
+
+            if not is_anomaly and delta <= solver.tolerance:
                 # Step Accepted
                 if filter_window is not None:
                     a_f_w = a_f_w * filter_window
@@ -476,14 +542,22 @@ def _solve_spectrum_vs_distance(
                 consecutive_rejections += 1
                 accepted = False
 
-                if current_h <= solver.min_step * 1.001:
+                if is_anomaly:
+                    # Harsh backoff upon detecting numerical anomaly to rescue convergence
+                    current_h = max(current_h * 0.25, solver.min_step)
+                    if current_h <= solver.min_step * 1.001 and consecutive_rejections >= 20:
+                        raise RuntimeError(
+                            f"Simulation halted: step size hit min_step ({solver.min_step:.2e} m) "
+                            f"and failed to recover from numerical anomaly after {consecutive_rejections} rejections at z = {z*100:.4f} cm"
+                        )
+                elif current_h <= solver.min_step * 1.001:
                     if consecutive_rejections >= 50:
                         raise RuntimeError(
                             f"Simulation halted: step size hit min_step ({solver.min_step:.2e} m) "
                             f"and failed to converge after {consecutive_rejections} rejections at z = {z*100:.4f} cm"
                         )
                     elif consecutive_rejections >= 3:
-                        # Step floor reached: force-accept fine step to prevent infinite stall
+                        # Step floor reached: force-accept fine step only if physically valid (no NaNs)
                         print(
                             f"[WARN] Step floor reached at z = {z*100:.4f} cm (h = {current_h*1e6:.4f} um, "
                             f"delta = {delta:.2e}): forcing step to prevent halt",

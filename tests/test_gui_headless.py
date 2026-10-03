@@ -63,7 +63,7 @@ def test_scientific_unit_labels_integrity(qtbot):
 
 
 def test_dynamic_layout_restructuring(qtbot):
-    """Verify switching simulation type updates Tab 2 from 2x2 to 1x2."""
+    """Verify switching simulation type updates Tab 2 layout appropriately."""
     window = MainWindow()
     qtbot.addWidget(window)
     window.show()
@@ -74,12 +74,13 @@ def test_dynamic_layout_restructuring(qtbot):
     results = window.tab_results
     controls = window.tab_controls
 
-    # Default is Spectrum vs Distance (2x2 grid)
+    # Switch to Time domain to verify temporal plots
+    results.set_domain_mode("time")
     assert results.current_sim_type == "spectrum_vs_distance"
     assert results.plot_time_2d.isHidden() is False
     assert results.plot_time_1d.isHidden() is False
 
-    # Switch to Spectrum vs Power (1x2 grid, time plots hidden)
+    # Switch to Spectrum vs Power (power sweep shown, time plots disabled)
     controls.combo_sim_type.setCurrentIndex(1)  # "Spectrum vs Power"
     assert results.current_sim_type == "spectrum_vs_power"
     assert results.plot_time_2d.isHidden() is True
@@ -87,11 +88,13 @@ def test_dynamic_layout_restructuring(qtbot):
     assert results.plot_freq_2d.isHidden() is False
     assert results.plot_freq_1d.isHidden() is False
 
-    # Switch back to Spectrum vs Distance (2x2 grid restored)
+    # Switch back to Spectrum vs Distance and verify time domain can be activated
     controls.combo_sim_type.setCurrentIndex(0)
     assert results.current_sim_type == "spectrum_vs_distance"
+    results.set_domain_mode("time")
     assert results.plot_time_2d.isHidden() is False
     assert results.plot_time_1d.isHidden() is False
+
 
 
 def test_preset_loading(qtbot):
@@ -637,3 +640,492 @@ def test_immediate_window_close_during_simulation_teardown(qtbot):
     assert window.worker_thread is None or not window.worker_thread.isRunning()
     assert window.worker is None or not window.worker.is_running
 
+
+def test_cyberpunk_theme_and_header_badges(qtbot):
+    """Verify Phase 4 Cyberpunk theme palette and Top Header diagnostic badges."""
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    # Verify theme stylesheet contains Google Stitch palette
+    qss = window.styleSheet()
+    assert "#0f131d" in qss  # BG_DARK
+    assert "#00f5ff" in qss  # CYAN_ACCENT
+    assert "#ff4b89" in qss  # PINK_ACCENT
+    assert "#703eda" in qss  # PURPLE_ACCENT
+
+    # Verify Header Diagnostic Badges
+    assert "CORE:" in window.lbl_badge_core.text()
+    assert window.lbl_badge_state.text() == "STATE: IDLE"
+    assert "dz:" in window.lbl_badge_dz.text()
+    assert "N:" in window.lbl_badge_grid.text()
+    assert "RATE:" in window.lbl_badge_rate.text()
+
+    # Verify Top Header Control Buttons
+    assert window.btn_top_run.text() == "▶ RUN SIMULATION"
+    assert window.btn_top_pause.text() == "❚❚ PAUSE"
+    assert window.btn_top_stop.text() == "⏹ STOP"
+    assert window.btn_top_export.text() == "💾 EXPORT DATA"
+    assert window.btn_top_run.isEnabled() is True
+    assert window.btn_top_pause.isEnabled() is False
+    assert window.btn_top_stop.isEnabled() is False
+
+
+def test_kpi_summary_banner_calculation(qtbot):
+    """Verify Phase 4 KPI Summary Banner correctly computes N, L_D, L_NL, and energy error."""
+    from src.gui.kpi_banner import KpiBannerWidget
+    from src.solver.config import PulseConfig, FiberConfig, DispersionConfig, SimulationState
+
+    banner = KpiBannerWidget()
+    qtbot.addWidget(banner)
+
+    # 1. Soliton N=1 configuration: T0 = 1.0 ps, P0 = 16.4615 W, gamma = 1.3e-3 W^-1 m^-1, beta2 = -2.14e-26 s^2/m
+    pulse = PulseConfig(shape="sech", t_fwhm=1.762747e-12, p_peak=16.4615, center_wavelength=1550e-9)
+    disp = DispersionConfig.from_si(beta2=-2.14e-26)
+    fiber = FiberConfig(length=100.0, gamma=1.3e-3, dispersion=disp)
+
+    banner.update_from_configs(pulse, fiber)
+
+    assert "N = 1.00" in banner.card_n.lbl_value.text()
+    assert "Fundamental Soliton" in banner.card_n.lbl_detail.text()
+    assert "46.73 m" in banner.card_scales.lbl_value.text()  # L_D = 1e-24 / 2.14e-26 ≈ 46.73 m
+    assert "46.73 m" in banner.card_scales.lbl_value.text()  # L_NL = 1 / (1.3e-3 * 16.4615) ≈ 46.73 m
+
+    # 2. Add simulation state with conservation error
+    N = 256
+    t = np.linspace(-5e-12, 5e-12, N)
+    omega = 2.0 * np.pi * np.fft.fftfreq(N, d=(t[1] - t[0]))
+    a_t = np.sqrt(16.4615) * (1.0 / np.cosh(t / 1e-12)).astype(np.complex128)
+    a_w = np.fft.ifft(a_t)
+    state = SimulationState(step=10, z=5.0, power=16.4615, h=0.001, t=t, omega=omega, a_t=a_t, a_w=a_w, rel_energy_err=1.23e-8, rel_photon_err=4.56e-8)
+
+    banner.update_from_configs(pulse, fiber, state)
+    assert "1.23e-08" in banner.card_err.lbl_value.text()
+    assert "Excellent" in banner.card_err.lbl_detail.text()
+
+
+def test_panel_a_linear_and_log_scale_toggle(qtbot):
+    """Verify Phase 4 Panel A Linear [W] and Log [dB] scale toggle."""
+    from src.gui.tab_results import TabResultsWidget
+    results = TabResultsWidget()
+    qtbot.addWidget(results)
+
+    # Prepare dummy data
+    N = 256
+    t_ps = np.linspace(-5.0, 5.0, N)
+    power_w = 100.0 * np.exp(-((t_ps / 1.0) ** 2))
+
+    results.plot_time_1d.set_before_curve(t_ps, power_w)
+    results.plot_time_1d.set_after_curve(t_ps, power_w * 0.8)
+
+    # Initial mode: Linear
+    assert results.plot_time_1d.scale_mode == "linear"
+    assert "Intensity [W]" in results.plot_time_1d.plot_item.getAxis("left").labelText
+
+    # Toggle to Log (dB)
+    results.btn_scale_log.click()
+    assert results.plot_time_1d.scale_mode == "log_db"
+    assert "Intensity [dB]" in results.plot_time_1d.plot_item.getAxis("left").labelText
+    _, y_data = results.plot_time_1d.curve_after.getData()
+    assert pytest.approx(np.max(y_data), abs=0.1) == 0.0  # Normalized 0 dB peak
+
+    # Toggle back to Linear
+    results.btn_scale_linear.click()
+    assert results.plot_time_1d.scale_mode == "linear"
+    assert "Intensity [W]" in results.plot_time_1d.plot_item.getAxis("left").labelText
+
+
+def test_panel_d_chirp_and_phase_reticle(qtbot):
+    """Verify Phase 4 Panel D Chirp & Phase Reticle computes instantaneous chirp and phase."""
+    from src.gui.reticle_plot import ChirpReticleWidget
+    reticle = ChirpReticleWidget()
+    qtbot.addWidget(reticle)
+
+    N = 512
+    t = np.linspace(-5e-12, 5e-12, N)
+    t0 = 1e-12
+    # Chirped pulse with known quadratic phase phi(t) = -0.5 * C * (t/t0)^2
+    chirp_c = 2.0
+    a_t = np.sqrt(100.0) * np.exp(-0.5 * (1.0 + 1j * chirp_c) * ((t / t0) ** 2))
+
+    reticle.update_data(t, a_t)
+
+    # Chirp curve data should exist
+    x_c, y_c = reticle.curve_chirp.getData()
+    assert len(x_c) == N
+    # Peak instantaneous frequency chirp: delta_omega = - dphi/dt = C * t / t0^2 -> linear chirp slope
+    assert reticle.h_line.isVisible() is True
+    assert reticle.v_line.isVisible() is True
+
+
+def test_soliton_peak_tracking_table(qtbot):
+    """Verify Phase 4 Soliton Peak Tracking Table identifies multi-soliton components."""
+    from src.gui.soliton_tracker import SolitonTrackerWidget
+    from src.solver.config import SimulationState, PulseConfig, FiberConfig, DispersionConfig
+
+    tracker = SolitonTrackerWidget()
+    qtbot.addWidget(tracker)
+
+    N = 1024
+    t = np.linspace(-10e-12, 10e-12, N)
+    omega = 2.0 * np.pi * np.fft.fftfreq(N, d=(t[1] - t[0]))
+
+    # Two distinct solitons separated in time:
+    # Soliton 1 at t = 0 ps (P = 50 kW, FWHM = 50 fs)
+    # Soliton 2 at t = +2.5 ps (P = 15 kW, FWHM = 80 fs)
+    p1 = np.sqrt(50000.0) / np.cosh(t / (50e-15 / 1.763))
+    p2 = np.sqrt(15000.0) / np.cosh((t - 2.5e-12) / (80e-15 / 1.763))
+    a_t = (p1 + p2).astype(np.complex128)
+    a_w = np.fft.ifft(a_t)
+
+    state = SimulationState(step=50, z=0.1, power=50000.0, h=0.001, t=t, omega=omega, a_t=a_t, a_w=a_w, rel_energy_err=1e-6, rel_photon_err=1e-6)
+    pulse = PulseConfig(shape="sech", t_fwhm=50e-15, p_peak=50000.0, center_wavelength=850e-9)
+    fiber = FiberConfig(length=0.1, gamma=45e-3, dispersion=DispersionConfig.from_si(beta2=-1.276e-26))
+
+    tracker.update_from_state(state, pulse, fiber)
+
+    # Must detect both soliton components
+    assert tracker.table.rowCount() >= 2
+    # Row 0: Soliton 1
+    assert "Soliton" in tracker.table.item(0, 0).text()
+    assert float(tracker.table.item(0, 4).text()) >= 40.0  # ~50 kW
+    # Row 1: Soliton 2
+    assert float(tracker.table.item(1, 4).text()) >= 10.0  # ~15 kW
+    assert pytest.approx(float(tracker.table.item(1, 2).text()), abs=0.2) == 2.5  # delay ~2.5 ps
+
+    # Test copy to clipboard
+    tracker._copy_to_clipboard()
+    assert tracker.btn_copy_table.text() == "✅ Copied!"
+
+
+def test_propagation_depth_scrubber_and_animation(qtbot):
+    """Verify Phase 4 Propagation Depth Scrubber and interactive slice updating."""
+    from src.gui.tab_results import TabResultsWidget
+    from src.solver.config import SimulationState
+
+    results = TabResultsWidget()
+    qtbot.addWidget(results)
+
+    N = 256
+    t = np.linspace(-5e-12, 5e-12, N)
+    omega = 2.0 * np.pi * np.fft.fftfreq(N, d=(t[1] - t[0]))
+    a_t = np.exp(-0.5 * (t / 1e-12) ** 2).astype(np.complex128)
+    a_w = np.fft.fft(a_t)
+
+    s0 = SimulationState(step=0, z=0.00, power=100.0, h=0.01, t=t, omega=omega, a_t=a_t, a_w=a_w, rel_energy_err=0.0, rel_photon_err=0.0)
+    s1 = SimulationState(step=1, z=0.05, power=90.0, h=0.01, t=t, omega=omega, a_t=a_t * 0.95, a_w=a_w * 0.95, rel_energy_err=1e-6, rel_photon_err=1e-6)
+    s2 = SimulationState(step=2, z=0.10, power=80.0, h=0.01, t=t, omega=omega, a_t=a_t * 0.90, a_w=a_w * 0.90, rel_energy_err=2e-6, rel_photon_err=2e-6)
+
+    results.prepare_for_simulation(s0, "RK4IP", center_wavelength=850e-9)
+    results.render_full_simulation(s2, [s0, s1, s2])
+
+    assert results.slider_z.isEnabled() is True
+    assert results.slider_z.maximum() == 2
+    assert results.slider_z.value() == 2
+
+    # Scrub to intermediate step z = 5 cm
+    results.slider_z.setValue(1)
+    assert "z = 5.00 cm" in results.lbl_scrub_depth.text()
+    assert results.plot_freq_2d.z_line.isVisible() is True
+    assert pytest.approx(results.plot_freq_2d.z_line.value(), abs=0.01) == 5.0
+
+    # Step buttons
+    results.btn_step_prev.click()
+    assert results.slider_z.value() == 0
+    results.btn_step_next.click()
+    assert results.slider_z.value() == 1
+
+    # Animation play toggle
+    results.btn_play_anim.click()
+    assert results.anim_timer.isActive() is True
+    results.btn_play_anim.click()
+    assert results.anim_timer.isActive() is False
+
+
+def test_latex_pgfplots_generation(qtbot):
+    """Verify Phase 4 LaTeX TikZ/PGFPlots export generates valid compilation code."""
+    from src.gui.tab_results import TabResultsWidget
+    from src.solver.config import SimulationState
+    from PyQt6.QtWidgets import QApplication
+
+    results = TabResultsWidget()
+    qtbot.addWidget(results)
+
+    N = 256
+    t = np.linspace(-5e-12, 5e-12, N)
+    omega = 2.0 * np.pi * np.fft.fftfreq(N, d=(t[1] - t[0]))
+    a_t = np.exp(-0.5 * (t / 1e-12) ** 2).astype(np.complex128)
+    a_w = np.fft.fft(a_t)
+
+    s1 = SimulationState(step=0, z=0.0, power=1.0, h=0.01, t=t, omega=omega, a_t=a_t, a_w=a_w, rel_energy_err=0.0, rel_photon_err=0.0)
+    results.prepare_for_simulation(s1, "RK4IP", center_wavelength=850e-9)
+    results.render_full_simulation(s1, [s1])
+
+    results._copy_pgfplots_snippet()
+    clipboard_text = QApplication.clipboard().text()
+
+    assert "\\begin{tikzpicture}" in clipboard_text
+    assert "\\begin{axis}" in clipboard_text
+    assert "\\addplot" in clipboard_text
+    assert "Wavelength" in clipboard_text
+    assert "\\end{axis}" in clipboard_text
+    assert "\\end{tikzpicture}" in clipboard_text
+
+
+def test_domain_view_selector_and_aspect_ratio_optimization(qtbot):
+    """Verify Domain View Selector (Time, Frequency only, All removed) and clean 2-column portrait layout."""
+    from src.gui.tab_results import TabResultsWidget
+    from src.solver.config import SimulationState
+
+    results = TabResultsWidget()
+    qtbot.addWidget(results)
+    results.show()
+
+    # 1. Default state: 'freq' domain mode (loaded from config.json)
+    assert results.domain_mode == "freq"
+    assert hasattr(results, "btn_view_time")
+    assert hasattr(results, "btn_view_freq")
+    assert not hasattr(results, "btn_view_all")
+    assert not hasattr(results, "box_all_layout")
+    assert results.btn_view_freq.isChecked() is True
+    assert results.btn_view_time.isChecked() is False
+
+    # In FREQ DOMAIN: Spectral plots shown, Temporal plots hidden
+    assert results.plot_time_2d.isHidden() is True
+    assert results.plot_time_1d.isHidden() is True
+    assert results.plot_freq_2d.isHidden() is False
+    assert results.plot_freq_1d.isHidden() is False
+    assert results.box_pulse_scale.isHidden() is True
+    assert not hasattr(results, "plot_chirp_reticle")
+
+    # Verify minimum height optimization (ensuring tall portrait stature)
+    assert results.plot_time_2d.minimumHeight() >= 380
+    assert results.plot_freq_2d.minimumHeight() >= 380
+    assert results.plot_time_1d.minimumHeight() >= 340
+    assert results.plot_freq_1d.minimumHeight() >= 340
+
+    # 2. Switch to TIME DOMAIN mode
+    results.btn_view_time.click()
+    assert results.domain_mode == "time"
+    assert results.btn_view_time.isChecked() is True
+    assert results.btn_view_freq.isChecked() is False
+
+    # In TIME DOMAIN: Spectral plots hidden, Temporal plots shown
+    # Panel D is NOT in grid_layout (clean 2-column portrait layout, no overlap)
+    assert results.plot_freq_2d.isHidden() is True
+    assert results.plot_freq_1d.isHidden() is True
+    assert results.plot_time_2d.isHidden() is False
+    assert results.plot_time_1d.isHidden() is False
+    assert not hasattr(results, "plot_chirp_reticle")
+    assert not hasattr(results, "plot_chirp_reticle")
+    assert results.box_pulse_scale.isHidden() is False
+
+    # Check 2-column placement in grid_layout (exactly 2 portrait columns: col 0 and col 1)
+    idx_t2d = results.grid_layout.indexOf(results.plot_time_2d)
+    idx_t1d = results.grid_layout.indexOf(results.plot_time_1d)
+    r_t2d, c_t2d, _, _ = results.grid_layout.getItemPosition(idx_t2d)
+    r_t1d, c_t1d, _, _ = results.grid_layout.getItemPosition(idx_t1d)
+    assert r_t2d == 0 and c_t2d == 0
+    assert r_t1d == 0 and c_t1d == 1
+
+    # 3. Switch back to FREQUENCY DOMAIN mode
+    results.btn_view_freq.click()
+    assert results.domain_mode == "freq"
+    assert results.btn_view_freq.isChecked() is True
+    assert results.btn_view_time.isChecked() is False
+
+    assert results.plot_time_2d.isHidden() is True
+    assert results.plot_time_1d.isHidden() is True
+    assert results.plot_freq_2d.isHidden() is False
+    assert results.plot_freq_1d.isHidden() is False
+    assert results.box_pulse_scale.isHidden() is True
+
+    # Check 2-column placement in grid_layout (side-by-side in row 0)
+    idx_f2d = results.grid_layout.indexOf(results.plot_freq_2d)
+    idx_f1d = results.grid_layout.indexOf(results.plot_freq_1d)
+    r_f2d, c_f2d, _, _ = results.grid_layout.getItemPosition(idx_f2d)
+    r_f1d, c_f1d, _, _ = results.grid_layout.getItemPosition(idx_f1d)
+    assert r_f2d == 0 and c_f2d == 0
+    assert r_f1d == 0 and c_f1d == 1
+
+
+def test_collapsible_telemetry_and_diagnostics_drawers(qtbot):
+    """Verify collapsible KPI telemetry and bottom diagnostics drawers starting minimized with active splitter."""
+    from src.gui.tab_results import TabResultsWidget
+
+    results = TabResultsWidget()
+    qtbot.addWidget(results)
+    results.show()
+
+    # KPI Banner collapsible toggle
+    assert results.kpi_banner.isVisible() is True
+    assert "▾" in results.btn_toggle_kpi.text()
+
+    results.btn_toggle_kpi.click()
+    assert results.kpi_banner.isVisible() is False
+    assert "▸" in results.btn_toggle_kpi.text()
+
+    results.btn_toggle_kpi.click()
+    assert results.kpi_banner.isVisible() is True
+    assert "▾" in results.btn_toggle_kpi.text()
+
+    # Bottom Diagnostics Drawer starts MINIMIZED / collapsed initially
+    assert results.sub_tabs.isVisible() is False
+    assert "▸" in results.btn_toggle_bottom.text()
+
+    # Expand via toggle button
+    results.btn_toggle_bottom.click()
+    assert results.sub_tabs.isVisible() is True
+    assert "▾" in results.btn_toggle_bottom.text()
+
+    # Collapse via toggle button
+    results.btn_toggle_bottom.click()
+    assert results.sub_tabs.isVisible() is False
+    assert "▸" in results.btn_toggle_bottom.text()
+
+    # Test dynamic expansion via mouse size adjuster (QSplitter handle)
+    results._on_splitter_moved(700, 1)
+    results.v_splitter.setSizes([700, 200])
+    results._on_splitter_moved(700, 1)
+    assert results.sub_tabs.isVisible() is True
+    assert "▾" in results.btn_toggle_bottom.text()
+
+
+def test_simulation_workflow_under_domain_modes(qtbot):
+    """Verify live rendering and scrubber interaction while switching between Time and Frequency domains."""
+    from src.gui.tab_results import TabResultsWidget
+    from src.solver.config import SimulationState
+
+    results = TabResultsWidget()
+    qtbot.addWidget(results)
+    results.show()
+
+    N = 256
+    t = np.linspace(-5e-12, 5e-12, N)
+    omega = 2.0 * np.pi * np.fft.fftfreq(N, d=(t[1] - t[0]))
+    a_t = np.exp(-0.5 * (t / 1e-12) ** 2).astype(np.complex128)
+    a_w = np.fft.fft(a_t)
+
+    s0 = SimulationState(step=0, z=0.0, power=1.0, h=0.05, t=t, omega=omega, a_t=a_t, a_w=a_w, rel_energy_err=0.0, rel_photon_err=0.0)
+    s1 = SimulationState(step=1, z=0.05, power=1.0, h=0.05, t=t, omega=omega, a_t=a_t * 0.9, a_w=a_w * 0.9, rel_energy_err=1e-5, rel_photon_err=1e-5)
+    s2 = SimulationState(step=2, z=0.10, power=1.0, h=0.05, t=t, omega=omega, a_t=a_t * 0.8, a_w=a_w * 0.8, rel_energy_err=2e-5, rel_photon_err=2e-5)
+
+    # 1. Start in TIME DOMAIN mode
+    results.set_domain_mode("time")
+    results.prepare_for_simulation(s0, "RK4IP", center_wavelength=1550e-9)
+    results.update_live_state(s1)
+    results.render_full_simulation(s2, [s0, s1, s2])
+
+    assert results.slider_z.isEnabled() is True
+    assert results.slider_z.value() == 2
+    assert results.plot_time_1d.isHidden() is False
+    assert results.plot_time_2d.isHidden() is False
+    # Reticle updated without polluting main time domain canvas
+    assert not hasattr(results, "plot_chirp_reticle")
+
+    # Scrub in TIME mode
+    results.slider_z.setValue(1)
+    assert "z = 5.00 cm" in results.lbl_scrub_depth.text()
+
+    # 2. Switch to FREQUENCY DOMAIN mode and scrub
+    results.set_domain_mode("freq")
+    assert results.plot_freq_1d.isHidden() is False
+    assert results.plot_freq_2d.isHidden() is False
+    assert results.plot_time_1d.isHidden() is True
+    results.slider_z.setValue(0)
+    assert "z = 0.00 cm" in results.lbl_scrub_depth.text()
+
+    # 3. Switching with legacy 'all' gracefully defaults to freq
+    results.set_domain_mode("all")
+    assert results.domain_mode == "freq"
+    assert results.plot_freq_1d.isHidden() is False
+    results.slider_z.setValue(2)
+    assert "z = 10.00 cm" in results.lbl_scrub_depth.text()
+
+
+def test_config_json_integration_and_fallback(tmp_path):
+    """Verify config.json loads correctly and corrupted/missing files fall back gracefully."""
+    import json
+    from src.gui.config_loader import load_gui_config, save_gui_config, DEFAULT_CONFIG
+    from src.gui.tab_results import TabResultsWidget
+
+    # 1. Test missing file fallback
+    missing_path = tmp_path / "non_existent_config.json"
+    cfg_missing = load_gui_config(missing_path)
+    assert cfg_missing["window"]["width"] == DEFAULT_CONFIG["window"]["width"]
+    assert cfg_missing["results_view"]["default_domain"] == "FREQUENCY DOMAIN"
+
+    # 2. Test corrupted json fallback without crashing
+    corrupt_path = tmp_path / "corrupt_config.json"
+    corrupt_path.write_text("{ this is invalid json syntax ::: ", encoding="utf-8")
+    cfg_corrupt = load_gui_config(corrupt_path)
+    assert cfg_corrupt["window"]["width"] == DEFAULT_CONFIG["window"]["width"]
+    assert cfg_corrupt["results_view"]["default_colormap"] == "turbo"
+
+    # 3. Test valid custom configuration
+    custom_path = tmp_path / "custom_config.json"
+    custom_dict = {
+        "window": {"width": 1600, "height": 1000},
+        "results_view": {
+            "default_domain": "TIME DOMAIN",
+            "default_colormap": "inferno",
+            "default_db_floor": -50.0,
+            "v_splitter_sizes": [900, 60],
+            "diagnostics_minimized": True,
+        }
+    }
+    save_gui_config(custom_dict, custom_path)
+    cfg_loaded = load_gui_config(custom_path)
+    assert cfg_loaded["window"]["width"] == 1600
+    assert cfg_loaded["results_view"]["default_domain"] == "TIME DOMAIN"
+    assert cfg_loaded["results_view"]["default_colormap"] == "inferno"
+
+    # Test TabResultsWidget applies custom config
+    w = TabResultsWidget(config=cfg_loaded["results_view"])
+    assert w.domain_mode == "time"
+    assert w.default_colormap == "inferno"
+    assert w.default_db_floor == -50.0
+    assert w.v_splitter_sizes == [900, 60]
+    assert w.sub_tabs.isVisible() is False
+
+
+
+
+
+def test_time_domain_only_two_portrait_plots_log_toggle_and_draggable_splitter(qtbot):
+    """Time Domain: waterfall + profile only, portrait; Panel D gone; splitter draggable from minimized."""
+    from src.gui.tab_results import TabResultsWidget
+
+    results = TabResultsWidget()
+    qtbot.addWidget(results)
+    results.resize(1200, 900)
+    results.show()
+    qtbot.waitExposed(results)
+
+    # Panel D completely removed
+    assert not hasattr(results, "plot_chirp_reticle")
+    for i in range(results.sub_tabs.count()):
+        assert "Panel D" not in results.sub_tabs.tabText(i)
+
+    results.set_domain_mode("time")
+    qtbot.wait(50)
+    assert results.grid_layout.count() == 2
+    assert results.plot_time_2d.isVisible() and results.plot_time_1d.isVisible()
+    assert not results.plot_freq_2d.isVisible() and not results.plot_freq_1d.isVisible()
+    for w in (results.plot_time_2d, results.plot_time_1d):
+        assert w.height() > w.width()
+
+    # Linear/Log toggle
+    results.btn_scale_log.click()
+    assert results.plot_time_1d.scale_mode == "log_db"
+    results.btn_scale_linear.click()
+    assert results.plot_time_1d.scale_mode == "linear"
+
+    # Splitter: starts minimized, handle present and draggable
+    sp = results.v_splitter
+    sizes = sp.sizes()
+    assert sizes[1] < sizes[0] * 0.2
+    assert sp.handleWidth() > 0 and sp.handle(1).isEnabled()
+    assert not sp.isCollapsible(0) and sp.isCollapsible(1)
+    total = sum(sizes)
+    sp.setSizes([total - 300, 300])
+    assert sp.sizes()[1] >= 250

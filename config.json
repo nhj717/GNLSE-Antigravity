@@ -1,0 +1,51 @@
+{
+  "window": {
+    "title": "GNLSE Pulse Propagation Simulator — High Performance Laboratory",
+    "width": 1440,
+    "height": 940
+  },
+  "results_view": {
+    "default_domain": "FREQUENCY DOMAIN",
+    "default_colormap": "turbo",
+    "default_db_floor": -40.0,
+    "time_range_ps": [
+      -2.5,
+      2.5
+    ],
+    "wl_range_nm": [
+      500.0,
+      1200.0
+    ],
+    "v_splitter_sizes": [
+      950,
+      50
+    ],
+    "diagnostics_minimized": true
+  },
+  "theme": {
+    "bg_dark": "#0f131d",
+    "surface_lowest": "#0a0e18",
+    "surface_low": "#171b26",
+    "surface": "#1c1f2a",
+    "surface_high": "#262a35",
+    "surface_highest": "#313540",
+    "surface_bright": "#353944",
+    "cyan_accent": "#00f5ff",
+    "cyan_bright": "#63f7ff",
+    "cyan_light": "#e9feff",
+    "cyan_dark": "#003739",
+    "pink_accent": "#ff4b89",
+    "pink_light": "#ffb1c3",
+    "pink_dark": "#3f0019",
+    "purple_accent": "#703eda",
+    "purple_light": "#e5d7ff",
+    "purple_dark": "#23005c",
+    "text_primary": "#dfe2f1",
+    "text_muted": "#b9caca",
+    "border_color": "#3a494a",
+    "border_subtle": "#262a35",
+    "green_success": "#00e676",
+    "amber_warning": "#ffab00",
+    "red_error": "#ff5252"
+  }
+}

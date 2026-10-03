@@ -49,6 +49,14 @@ class DensityMapWidget(QWidget):
         self.img_item = pg.ImageItem()
         self.plot_item.addItem(self.img_item)
 
+        # Depth Scrubber Crosshair Indicator Line
+        self.z_line = pg.InfiniteLine(
+            angle=0, movable=False,
+            pen=pg.mkPen(color="#00f5ff", width=1.5, style=Qt.PenStyle.DashLine)
+        )
+        self.z_line.setVisible(False)
+        self.plot_item.addItem(self.z_line, ignoreBounds=True)
+
         # Colorbar
         self.colorbar = pg.ColorBarItem(
             values=(-40.0, 0.0),
@@ -62,6 +70,14 @@ class DensityMapWidget(QWidget):
         self.colorbar.setLevels((-40.0, 0.0))
 
         layout.addWidget(self.plot_widget)
+
+    def set_z_indicator(self, z_val: Optional[float]) -> None:
+        """Display or hide horizontal z position indicator crosshair."""
+        if z_val is None:
+            self.z_line.setVisible(False)
+        else:
+            self.z_line.setValue(z_val)
+            self.z_line.setVisible(True)
 
     def set_colormap(self, cmap_name: str) -> None:
         """Switch active colormap (e.g. turbo, viridis, inferno, magma, plasma, jet)."""
@@ -140,6 +156,13 @@ class LinePlotWidget(QWidget):
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
+        self.default_y_label = y_label
+        self.scale_mode = "linear" if not log_y else "log_db"
+        self._raw_before_x: np.ndarray = np.array([])
+        self._raw_before_y: np.ndarray = np.array([])
+        self._raw_after_x: np.ndarray = np.array([])
+        self._raw_after_y: np.ndarray = np.array([])
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
@@ -168,13 +191,46 @@ class LinePlotWidget(QWidget):
         layout.addWidget(self.plot_widget)
 
     def set_before_curve(self, x: np.ndarray, y: np.ndarray) -> None:
-        self.curve_before.setData(x, y)
+        self._raw_before_x = np.asarray(x, dtype=float)
+        self._raw_before_y = np.asarray(y, dtype=float)
+        self._render_curves()
 
     def set_after_curve(self, x: np.ndarray, y: np.ndarray, label: Optional[str] = None) -> None:
-        self.curve_after.setData(x, y)
-        if label and self.legend:
-            # Update legend text if custom label passed
-            pass
+        self._raw_after_x = np.asarray(x, dtype=float)
+        self._raw_after_y = np.asarray(y, dtype=float)
+        self._render_curves()
+
+    def set_scale_mode(self, mode: str) -> None:
+        """Switch between 'linear' and 'log_db' display scaling."""
+        if mode not in ("linear", "log_db"):
+            return
+        self.scale_mode = mode
+        if mode == "log_db":
+            self.plot_item.setLabel("left", "Normalized Intensity [dB]")
+            self.set_y_limits(-60.0, 5.0)
+        else:
+            self.plot_item.setLabel("left", self.default_y_label)
+            self.plot_item.enableAutoRange(axis="y")
+        self._render_curves()
+
+    def _render_curves(self) -> None:
+        # Before curve
+        if len(self._raw_before_x) > 0 and len(self._raw_before_y) > 0:
+            if self.scale_mode == "log_db" and "Intensity" in self.default_y_label:
+                y_max = max(float(np.max(self._raw_before_y)), 1e-30)
+                y_disp = 10.0 * np.log10(np.maximum(self._raw_before_y, 1e-30) / y_max)
+                self.curve_before.setData(self._raw_before_x, y_disp)
+            else:
+                self.curve_before.setData(self._raw_before_x, self._raw_before_y)
+
+        # After curve
+        if len(self._raw_after_x) > 0 and len(self._raw_after_y) > 0:
+            if self.scale_mode == "log_db" and "Intensity" in self.default_y_label:
+                y_max = max(float(np.max(self._raw_after_y)), 1e-30)
+                y_disp = 10.0 * np.log10(np.maximum(self._raw_after_y, 1e-30) / y_max)
+                self.curve_after.setData(self._raw_after_x, y_disp)
+            else:
+                self.curve_after.setData(self._raw_after_x, self._raw_after_y)
 
     def set_x_range(self, x_min: float, x_max: float) -> None:
         self.plot_item.setXRange(x_min, x_max, padding=0.0)
