@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import time
 from typing import Optional, List
-from PyQt6.QtCore import Qt, QThread, pyqtSlot
+from PyQt6.QtCore import Qt, QThread, pyqtSlot, QTimer
 from PyQt6.QtWidgets import (
     QStackedWidget, QMainWindow, QTabWidget, QWidget, QHBoxLayout, QVBoxLayout,
     QSplitter, QProgressBar, QLabel, QStatusBar, QMessageBox, QPushButton, QFrame
@@ -293,6 +293,14 @@ class MainWindow(QMainWindow):
         self._active_pulse: Optional[PulseConfig] = None
         self._active_fiber: Optional[FiberConfig] = None
 
+        # Decoupled Non-Blocking Real-Time Render Timer (~10 FPS, interval 100 ms)
+        # Capping live GUI updates to 10 FPS avoids saturating the Python GIL with Qt/pyqtgraph
+        # paint operations, allowing the numerical solver worker to run at near-headless speeds.
+        self._render_timer = QTimer(self)
+        self._render_timer.setInterval(100)
+        self._render_timer.timeout.connect(self._on_render_timer_tick)
+        self._last_telemetry_time = 0.0
+
         # Wire UI interactions
         self.file_navigator.file_selected.connect(self.tab_controls.set_active_import_file)
         self.tab_controls.dispersion_mode_changed.connect(self.disp_stack.setCurrentIndex)
@@ -385,19 +393,24 @@ class MainWindow(QMainWindow):
         # Setup worker configuration before starting thread
         self.worker.setup(pulse, fiber, solver, display_live)
 
-        # Connect signals
-        self.worker.state_updated.connect(self._on_state_updated)
+        # Connect signals (state_updated is decoupled via _render_timer pulling latest_state at 30 FPS)
         self.worker.progress_updated.connect(self._on_progress)
         self.worker.log_emitted.connect(self.tab_logging.append_log)
         self.worker.simulation_finished.connect(self._on_finished)
         self.worker.simulation_aborted.connect(self._on_aborted)
         self.worker.error_occurred.connect(self._on_error)
 
+        # Start decoupled 10 FPS rendering timer if live display enabled
+        self._last_telemetry_time = 0.0
+        if display_live:
+            self._render_timer.start(100)
+
         # Start thread - invokes worker.start slot on worker_thread context
         self.worker_thread.started.connect(self.worker.start)
         self.worker_thread.start()
 
     def _pause_simulation(self) -> None:
+        self._render_timer.stop()
         if self.worker:
             self.worker.pause()
             self.lbl_status.setText("Status: Paused ❚❚")
@@ -412,27 +425,43 @@ class MainWindow(QMainWindow):
             self.lbl_badge_state.setText("STATE: SIMULATING")
             self.btn_top_pause.setText("❚❚ PAUSE")
             self.tab_logging.append_log("INFO", "Simulation execution resumed.")
+            if getattr(self.worker, "_display_live", True):
+                self._render_timer.start(100)
 
     def _abort_simulation(self) -> None:
+        self._render_timer.stop()
         if self.worker:
             self.worker.abort()
             self.lbl_status.setText("Status: Aborting...")
             self.lbl_badge_state.setText("STATE: ABORTING")
 
-    @pyqtSlot(object)
-    def _on_state_updated(self, state: SimulationState) -> None:
-        """Handle throttled live state updates for visualization and conservation diagnostics."""
-        self.tab_results.update_live_state(state)
-        self.tab_logging.update_metrics(state.rel_energy_err, state.rel_photon_err, state.h)
-        if self._active_pulse and self._active_fiber:
-            self.tab_results.kpi_banner.update_from_configs(self._active_pulse, self._active_fiber, state)
+    def _on_render_timer_tick(self) -> None:
+        """Poll the solver worker for the latest state at ~30 FPS without Qt event loop saturation."""
+        if self.worker is None:
+            return
+        state = self.worker.get_latest_state()
+        if state is not None:
+            self._on_state_updated(state)
 
-        # Update telemetry badges
-        h_mm = state.h * 1e3
-        if h_mm >= 1.0:
-            self.lbl_badge_dz.setText(f"dz: {h_mm:.2f} mm")
-        else:
-            self.lbl_badge_dz.setText(f"dz: {state.h * 1e6:.1f} μm")
+    @pyqtSlot(object)
+    def _on_state_updated(self, state: SimulationState, force_telemetry: bool = False) -> None:
+        """Handle live state updates for visualization and conservation diagnostics."""
+        self.tab_results.update_live_state(state)
+
+        # Decimate telemetry, KPI banner, and logging updates to 10 Hz (interval >= 0.10 s)
+        now = time.perf_counter()
+        if force_telemetry or (now - self._last_telemetry_time >= 0.10):
+            self._last_telemetry_time = now
+            self.tab_logging.update_metrics(state.rel_energy_err, state.rel_photon_err, state.h)
+            if self._active_pulse and self._active_fiber:
+                self.tab_results.kpi_banner.update_from_configs(self._active_pulse, self._active_fiber, state)
+
+            # Update telemetry badges
+            h_mm = state.h * 1e3
+            if h_mm >= 1.0:
+                self.lbl_badge_dz.setText(f"dz: {h_mm:.2f} mm")
+            else:
+                self.lbl_badge_dz.setText(f"dz: {state.h * 1e6:.1f} μm")
 
     @pyqtSlot(int, float, float)
     def _on_progress(self, step: int, current_val: float, total_val: float) -> None:
@@ -464,11 +493,15 @@ class MainWindow(QMainWindow):
     @pyqtSlot(object, list)
     def _on_finished(self, final_state: SimulationState, history: list) -> None:
         """Handle simulation completion."""
+        self._render_timer.stop()
         self.lbl_status.setText("Status: Completed ✅")
         self.lbl_badge_state.setText("STATE: COMPLETED")
         self.progress_bar.setValue(100)
         self.tab_controls.set_running_state(False)
         self._update_top_buttons(running=False)
+
+        # Flush final state to live plots and telemetry
+        self._on_state_updated(final_state, force_telemetry=True)
 
         # Render complete 2D density maps and activate scrubber
         self.tab_results.render_full_simulation(final_state, history)
@@ -487,6 +520,7 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot()
     def _on_aborted(self) -> None:
+        self._render_timer.stop()
         self.lbl_status.setText("Status: Aborted ⏹")
         self.lbl_badge_state.setText("STATE: ABORTED")
         self.tab_controls.set_running_state(False)
@@ -495,6 +529,7 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot(str)
     def _on_error(self, err_msg: str) -> None:
+        self._render_timer.stop()
         self.lbl_status.setText("Status: Error ⚠️")
         self.lbl_badge_state.setText("STATE: ERROR")
         self.tab_controls.set_running_state(False)
@@ -509,6 +544,7 @@ class MainWindow(QMainWindow):
         self.btn_top_pause.setText("❚❚ PAUSE")
 
     def _cleanup_thread(self) -> None:
+        self._render_timer.stop()
         if self.worker:
             self.worker.abort()
         if self.worker_thread and self.worker_thread.isRunning():

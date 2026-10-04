@@ -35,3 +35,13 @@ def is_accel_available() -> bool:
 def get_accel_stepper(method: str) -> Optional[Callable[..., Any]]:
     """Return the compiled stepper for the specified method, or None if not available."""
     return _COMPILED_STEPPERS.get(method)
+
+
+from . import fft_backend
+from .fft_backend import (
+    is_pyfftw_available,
+    get_fft_backend,
+    set_fft_backend,
+)
+
+

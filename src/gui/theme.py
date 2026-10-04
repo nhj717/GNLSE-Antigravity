@@ -274,18 +274,22 @@ QGroupBox {{
     font-weight: bold;
     border: 1px solid {border_subtle};
     border-radius: 6px;
-    margin-top: 10px;
-    padding-top: 14px;
+    margin-top: 18px;
+    padding-top: 12px;
     background-color: {surface_low};
 }}
 QGroupBox::title {{
     subcontrol-origin: margin;
     subcontrol-position: top left;
-    left: 12px;
-    padding: 0 4px;
+    left: 10px;
+    top: 0px;
+    padding: 2px 8px;
     color: {cyan_accent};
-    font-size: 10px;
+    font-size: 11px;
+    font-weight: bold;
     letter-spacing: 0.5px;
+    background-color: {surface_low};
+    border-radius: 3px;
 }}
 
 /* Sliders */

@@ -37,6 +37,7 @@ class DispersionConfig:
     h5_group: Optional[str] = None
     h5_dataset_x: Optional[str] = None
     h5_dataset_y: Optional[str] = None
+    data_type: Literal["auto", "beta", "beta2", "D", "n_eff"] = "auto"
 
     def __post_init__(self) -> None:
         if self.mode not in ("manual", "import"):
@@ -44,6 +45,30 @@ class DispersionConfig:
         # Ensure betas list has at least 6 elements
         if len(self.betas) < 6:
             self.betas = list(self.betas) + [0.0] * (6 - len(self.betas))
+
+    @staticmethod
+    def d_to_beta2(d_ps_nm_km: float | np.ndarray, wavelength_m: float | np.ndarray) -> float | np.ndarray:
+        """Convert dispersion parameter D [ps/(nm·km)] to GVD beta_2 [s^2/m].
+
+        Formula: beta_2(lambda) = - (lambda^2 / (2 * pi * c)) * D_SI
+        where 1 ps/(nm·km) = 1e-6 s/m^2.
+        """
+        d_si = np.asarray(d_ps_nm_km) * 1e-6
+        wl = np.asarray(wavelength_m)
+        res = - (wl ** 2 / (2.0 * math.pi * C_CONST)) * d_si
+        return float(res) if np.ndim(d_ps_nm_km) == 0 and np.ndim(wavelength_m) == 0 else res
+
+    @staticmethod
+    def beta2_to_d(beta2_si: float | np.ndarray, wavelength_m: float | np.ndarray) -> float | np.ndarray:
+        """Convert GVD beta_2 [s^2/m] to dispersion parameter D [ps/(nm·km)].
+
+        Formula: D = - (2 * pi * c / lambda^2) * beta_2 / 1e-6
+        """
+        b2 = np.asarray(beta2_si)
+        wl = np.asarray(wavelength_m)
+        d_si = - (2.0 * math.pi * C_CONST / (wl ** 2)) * b2
+        res = d_si / 1e-6
+        return float(res) if np.ndim(beta2_si) == 0 and np.ndim(wavelength_m) == 0 else res
 
     @property
     def beta2(self) -> float:
@@ -141,9 +166,23 @@ class DispersionConfig:
     ) -> "DispersionConfig":
         return cls(mode="manual", betas=[beta2, beta3, beta4, beta5, beta6, beta7])
     @classmethod
-    def from_import(cls, import_path: str) -> "DispersionConfig":
+    def from_import(
+        cls,
+        import_path: str,
+        h5_group: Optional[str] = None,
+        h5_dataset_x: Optional[str] = None,
+        h5_dataset_y: Optional[str] = None,
+        data_type: Literal["auto", "beta", "beta2", "D", "n_eff"] = "auto",
+    ) -> "DispersionConfig":
         """Instantiate DispersionConfig in import mode for a .csv or .h5 file."""
-        return cls(mode="import", import_path=import_path)
+        return cls(
+            mode="import",
+            import_path=import_path,
+            h5_group=h5_group,
+            h5_dataset_x=h5_dataset_x,
+            h5_dataset_y=h5_dataset_y,
+            data_type=data_type,
+        )
 
     def to_dict(self) -> dict:
         import dataclasses
@@ -186,7 +225,7 @@ class PulseConfig:
     - chirp: Dimensionless chirp parameter C (phase factor exp(-i * C / 2 * (T/T0)^2))
     """
 
-    shape: Literal["sech", "gaussian", "custom"] = "sech"
+    shape: Literal["sech", "gaussian", "lorentzian", "custom"] = "sech"
     t_fwhm: float = 1.763e-12  # s (default ~1.763 ps)
     p_peak: float = 16.46  # W
     center_wavelength: float = 1550e-9  # m
@@ -195,8 +234,8 @@ class PulseConfig:
     custom_time: Optional[np.ndarray] = None
 
     def __post_init__(self) -> None:
-        if self.shape not in ("sech", "gaussian", "custom"):
-            raise ValueError(f"Invalid pulse shape '{self.shape}', must be 'sech', 'gaussian', or 'custom'.")
+        if self.shape not in ("sech", "gaussian", "lorentzian", "custom"):
+            raise ValueError(f"Invalid pulse shape '{self.shape}', must be 'sech', 'gaussian', 'lorentzian', or 'custom'.")
         if self.t_fwhm <= 0:
             raise ValueError(f"Pulse t_fwhm must be positive, got {self.t_fwhm}")
         if self.p_peak < 0:
@@ -210,9 +249,16 @@ class PulseConfig:
 
         - sech: T_0 = T_FWHM / (2 * ln(1 + sqrt(2))) ≈ T_FWHM / 1.762747174
         - gaussian: T_0 = T_FWHM / (2 * sqrt(ln(2))) ≈ T_FWHM / 1.665109222
+        - lorentzian: A(t) = sqrt(P0) / (1 + (t/T0)^2).
+          Intensity I(t) = |A(t)|^2 = P0 / (1 + (t/T0)^2)^2.
+          At I(T_FWHM / 2) = P0 / 2:
+            (1 + (T_FWHM / (2*T0))^2)^2 = 2 => (T_FWHM / (2*T0))^2 = sqrt(2) - 1.
+          Therefore T_0 = T_FWHM / (2 * sqrt(sqrt(2) - 1)) ≈ T_FWHM / 1.287188506
         """
         if self.shape == "gaussian":
             return self.t_fwhm / (2.0 * math.sqrt(math.log(2.0)))
+        elif self.shape == "lorentzian":
+            return self.t_fwhm / (2.0 * math.sqrt(math.sqrt(2.0) - 1.0))
         return self.t_fwhm / (2.0 * math.log(1.0 + math.sqrt(2.0)))
 
     @property

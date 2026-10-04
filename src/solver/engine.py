@@ -36,7 +36,7 @@ from .operators import (
     super_gaussian_filter,
 )
 from .raman import prepare_raman_fft
-from .accel import get_accel_stepper, is_accel_available
+from .accel import get_accel_stepper, is_accel_available, fft_backend as sf
 
 
 def generate_initial_pulse(pulse: PulseConfig, t: np.ndarray) -> np.ndarray:
@@ -61,6 +61,14 @@ def generate_initial_pulse(pulse: PulseConfig, t: np.ndarray) -> np.ndarray:
         else:
             exponent = -0.5 * ((t / t0) ** 2)
         return (np.sqrt(p0) * np.exp(exponent)).astype(np.complex128)
+
+    elif pulse.shape == "lorentzian":
+        t0 = pulse.t0
+        envelope = np.sqrt(p0) / (1.0 + (t / t0) ** 2)
+        if abs(chirp) > 1e-15:
+            phase = -0.5 * chirp * ((t / t0) ** 2)
+            return (envelope * np.exp(1j * phase)).astype(np.complex128)
+        return envelope.astype(np.complex128)
 
     elif pulse.shape == "custom":
         if pulse.custom_field is None:
@@ -465,6 +473,7 @@ def _solve_spectrum_vs_distance(
             accepted = True
         else:
             # Adaptive step-doubling local error control (Spec §2.8)
+            # Evaluate substeps without filter to isolate differential equation truncation error
             # 1. Coarse step: size h
             a_c_t, a_c_w = stepper_fn(
                 a_t,
@@ -475,7 +484,7 @@ def _solve_spectrum_vs_distance(
                 shock_factor,
                 raman_fft,
                 raman_fr,
-                filter_window,
+                None,
                 dt=dt,
             )
 
@@ -490,7 +499,7 @@ def _solve_spectrum_vs_distance(
                 shock_factor,
                 raman_fft,
                 raman_fr,
-                filter_window,
+                None,
                 dt=dt,
             )
             a_f_t, a_f_w = stepper_fn(
@@ -502,18 +511,16 @@ def _solve_spectrum_vs_distance(
                 shock_factor,
                 raman_fft,
                 raman_fr,
-                filter_window,
+                None,
                 dt=dt,
             )
 
-            # 3. Anomaly detection: prevent NaNs or unphysical runaway before cascade
+            # 3. Anomaly detection: prevent NaNs or non-finite divergence
             norm_fine = float(np.linalg.norm(a_f_t))
-            p_max_fine = float(np.max(np.abs(a_f_t) ** 2))
             is_anomaly = (
                 not np.isfinite(norm_fine)
                 or np.isnan(a_f_t).any()
                 or np.isnan(a_c_t).any()
-                or (pulse.p_peak > 0.0 and p_max_fine > 100.0 * pulse.p_peak and p_max_fine > 1e6)
             )
 
             if is_anomaly:
@@ -525,7 +532,7 @@ def _solve_spectrum_vs_distance(
                 # Step Accepted
                 if filter_window is not None:
                     a_f_w = a_f_w * filter_window
-                    a_f_t = np.fft.fft(a_f_w)
+                    a_f_t = sf.fft(a_f_w) if is_accel_available() else np.fft.fft(a_f_w)
                 z += current_h
                 a_t = a_f_t
                 a_w = a_f_w
@@ -565,7 +572,7 @@ def _solve_spectrum_vs_distance(
                         )
                         if filter_window is not None:
                             a_f_w = a_f_w * filter_window
-                            a_f_t = np.fft.fft(a_f_w)
+                            a_f_t = sf.fft(a_f_w) if is_accel_available() else np.fft.fft(a_f_w)
                         z += current_h
                         a_t = a_f_t
                         a_w = a_f_w

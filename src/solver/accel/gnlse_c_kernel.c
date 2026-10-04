@@ -26,9 +26,30 @@ static PyObject* py_fused_linear_step(PyObject* self, PyObject* args) {
     const double complex *exp_d = (const double complex*)PyArray_DATA(exp_arr);
     double complex *out_w = (double complex*)PyArray_DATA(out_arr);
 
-    #pragma omp parallel for schedule(static) if(n > 512)
+    #pragma omp parallel for schedule(static) if(n > 65536)
     for (npy_intp i = 0; i < n; ++i) {
         out_w[i] = in_w[i] * exp_d[i];
+    }
+
+    Py_RETURN_NONE;
+}
+
+/* 1b. Fast Fused Intensity: out_int[i] = |a_t[i]|^2 = re*re + im*im */
+static PyObject* py_fused_intensity(PyObject* self, PyObject* args) {
+    PyArrayObject *at_arr, *int_arr;
+    if (!PyArg_ParseTuple(args, "O!O!", &PyArray_Type, &at_arr, &PyArray_Type, &int_arr)) {
+        return NULL;
+    }
+
+    npy_intp n = PyArray_SIZE(at_arr);
+    const double complex *a_t = (const double complex*)PyArray_DATA(at_arr);
+    double *intensity = (double*)PyArray_DATA(int_arr);
+
+    #pragma omp parallel for schedule(static) if(n > 65536)
+    for (npy_intp i = 0; i < n; ++i) {
+        double re = creal(a_t[i]);
+        double im = cimag(a_t[i]);
+        intensity[i] = re * re + im * im;
     }
 
     Py_RETURN_NONE;
@@ -62,7 +83,7 @@ static PyObject* py_fused_nonlinear_bt(PyObject* self, PyObject* args) {
         i_conv = (const double*)PyArray_DATA((PyArrayObject*)conv_arr);
     }
 
-    #pragma omp parallel for schedule(static) if(n > 512)
+    #pragma omp parallel for schedule(static) if(n > 65536)
     for (npy_intp i = 0; i < n; ++i) {
         double re = creal(a_t[i]);
         double im = cimag(a_t[i]);
@@ -106,7 +127,7 @@ static PyObject* py_fused_apply_shock_gamma(PyObject* self, PyObject* args) {
         shock = (const double*)PyArray_DATA((PyArrayObject*)shock_arr);
     }
 
-    #pragma omp parallel for schedule(static) if(n > 512)
+    #pragma omp parallel for schedule(static) if(n > 65536)
     for (npy_intp i = 0; i < n; ++i) {
         double scale = has_shock ? (gamma * shock[i * stride_shock]) : gamma;
         double re = creal(b_w[i]);
@@ -137,7 +158,7 @@ static PyObject* py_fused_rk_stage_prep(PyObject* self, PyObject* args) {
     const double complex *k = (const double complex*)PyArray_DATA(k_arr);
     double complex *u = (double complex*)PyArray_DATA(u_arr);
 
-    #pragma omp parallel for schedule(static) if(n > 512)
+    #pragma omp parallel for schedule(static) if(n > 65536)
     for (npy_intp i = 0; i < n; ++i) {
         u[i] = a_i[i] + scale * k[i];
     }
@@ -164,7 +185,7 @@ static PyObject* py_fused_rk_prop_stage4(PyObject* self, PyObject* args) {
     const double complex *exp_d = (const double complex*)PyArray_DATA(exp_arr);
     double complex *u4_w = (double complex*)PyArray_DATA(u4w_arr);
 
-    #pragma omp parallel for schedule(static) if(n > 512)
+    #pragma omp parallel for schedule(static) if(n > 65536)
     for (npy_intp i = 0; i < n; ++i) {
         u4_w[i] = exp_d[i] * (a_i_w[i] + k3_w[i]);
     }
@@ -211,7 +232,7 @@ static PyObject* py_fused_rk4ip_assembly(PyObject* self, PyObject* args) {
     const double one_sixth = 1.0 / 6.0;
     const double one_third = 1.0 / 3.0;
 
-    #pragma omp parallel for schedule(static) if(n > 512)
+    #pragma omp parallel for schedule(static) if(n > 65536)
     for (npy_intp i = 0; i < n; ++i) {
         double complex mid = a_i_w[i] + one_sixth * k1_w[i] + one_third * k2_w[i] + one_third * k3_w[i];
         double complex val = exp_d[i] * mid + one_sixth * k4_w[i];
@@ -227,6 +248,7 @@ static PyObject* py_fused_rk4ip_assembly(PyObject* self, PyObject* args) {
 /* Method registration table */
 static PyMethodDef GnlseMethods[] = {
     {"fused_linear_step", py_fused_linear_step, METH_VARARGS, "Vectorized linear propagation step"},
+    {"fused_intensity", py_fused_intensity, METH_VARARGS, "Vectorized intensity computation"},
     {"fused_nonlinear_bt", py_fused_nonlinear_bt, METH_VARARGS, "Vectorized intensity and B(T) computation"},
     {"fused_apply_shock_gamma", py_fused_apply_shock_gamma, METH_VARARGS, "Vectorized shock and gamma scaling"},
     {"fused_rk_stage_prep", py_fused_rk_stage_prep, METH_VARARGS, "Vectorized RK stage field addition"},

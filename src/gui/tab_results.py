@@ -12,6 +12,7 @@ Multi-panel Cyberpunk Laboratory Canvas:
 from __future__ import annotations
 
 import os
+import time
 import csv
 import math
 import h5py
@@ -262,10 +263,14 @@ class TabResultsWidget(QWidget):
         self.plot_time_2d.set_db_floor(self.default_db_floor)
         self.plot_freq_2d.set_db_floor(self.default_db_floor)
 
-        # Wavelength Window Control Toolbar for 1D Freq Plot
-        self.wl_toolbar = QHBoxLayout()
-        self.wl_toolbar.setContentsMargins(4, 0, 4, 0)
-        self.wl_toolbar.addWidget(QLabel("λ Range [nm]:"))
+        # Wavelength Window Control Toolbar for Freq View (placed in controls_bar for perfect graph alignment)
+        self.box_wl_toolbar = QWidget()
+        self.wl_toolbar = QHBoxLayout(self.box_wl_toolbar)
+        self.wl_toolbar.setContentsMargins(0, 0, 0, 0)
+        self.wl_toolbar.setSpacing(4)
+        lbl_wl = QLabel("λ Range [nm]:")
+        lbl_wl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px; font-weight: bold;")
+        self.wl_toolbar.addWidget(lbl_wl)
 
         self.spin_wl_min = QDoubleSpinBox()
         self.spin_wl_min.setRange(100.0, 5000.0)
@@ -278,16 +283,18 @@ class TabResultsWidget(QWidget):
         self.spin_wl_max.setDecimals(1)
 
         self.btn_wl_reset = QPushButton("Reset Fit")
+        self.btn_wl_reset.setStyleSheet(f"padding: 3px 6px; font-size: 10px; background-color: {SURFACE_LOW};")
         self.btn_hult_window = QPushButton("🎯 Hult Window (500–1200 nm)")
+        self.btn_hult_window.setStyleSheet(f"padding: 3px 6px; font-size: 10px; background-color: {SURFACE_LOW};")
 
         self.wl_toolbar.addWidget(self.spin_wl_min)
         self.wl_toolbar.addWidget(QLabel("to"))
         self.wl_toolbar.addWidget(self.spin_wl_max)
         self.wl_toolbar.addWidget(self.btn_wl_reset)
         self.wl_toolbar.addWidget(self.btn_hult_window)
-        self.wl_toolbar.addStretch()
 
-        self.plot_freq_1d.layout().addLayout(self.wl_toolbar)
+        # Place box_wl_toolbar in controls_bar right before the stretch
+        controls_bar.insertWidget(controls_bar.count() - 1, self.box_wl_toolbar)
 
         self.spin_wl_min.valueChanged.connect(self._on_wl_range_changed)
         self.spin_wl_max.valueChanged.connect(self._on_wl_range_changed)
@@ -530,6 +537,8 @@ class TabResultsWidget(QWidget):
         self.btn_view_freq.setChecked(mode == "freq")
         self._update_domain_button_styles()
         self._apply_layout()
+        if getattr(self, "_latest_live_state", None) is not None:
+            self.update_live_state(self._latest_live_state, force=True)
 
     def set_all_layout_mode(self, layout_mode: str) -> None:
         """Legacy helper maintained for backward compatibility."""
@@ -580,7 +589,9 @@ class TabResultsWidget(QWidget):
             self.grid_layout.setColumnStretch(c, 0)
 
         # 2. Contextual controls visibility
-        self.box_pulse_scale.setVisible(self.domain_mode == "time")
+        is_time = (self.domain_mode == "time" and self.current_sim_type != "spectrum_vs_power")
+        self.box_pulse_scale.setVisible(is_time)
+        self.box_wl_toolbar.setVisible(not is_time)
 
         # 3. Simulation Type: Power Sweep
         if self.current_sim_type == "spectrum_vs_power":
@@ -684,6 +695,10 @@ class TabResultsWidget(QWidget):
         self.plot_time_1d.set_x_range(-2.5, 2.5)
         self.plot_time_2d.set_x_range(-2.5, 2.5)
 
+        # Set stable initial Y-limits for temporal pulse with headroom (avoids continuous axis tick churn)
+        p_max = float(np.max(intensity_0))
+        self.plot_time_1d.set_y_limits(0.0, p_max * 1.25 if p_max > 0 else 1.0)
+
         # Center frequency omega0 - Raw simulation spectrum
         wl_nm, psd_db = spectrum_to_db(initial_state.a_w, initial_state.omega, self.omega0)
         self.plot_freq_1d.set_before_curve(wl_nm, psd_db)
@@ -716,40 +731,73 @@ class TabResultsWidget(QWidget):
         self.live_freq_map = np.full((MAX_STEPS, N_pts_freq), -40.0)
         self.live_y_coords = np.zeros(MAX_STEPS)
         self.live_step_idx = 0
+        self._latest_live_state = None
+        self._last_2d_update_time = 0.0
 
-    def update_live_state(self, state: SimulationState) -> None:
+    def update_live_state(self, state: SimulationState, force: bool = False) -> None:
         """Update 1D 'after' curves and live 2D maps in real-time."""
-        t_ps = envelope_to_time_ps(state.t)
-        intensity = np.abs(state.a_t) ** 2
-        self.plot_time_1d.set_after_curve(t_ps, intensity)
+        self._latest_live_state = state
+        is_time_domain = (self.domain_mode == "time" and self.current_sim_type != "spectrum_vs_power")
 
-        wl_nm, psd_db = spectrum_to_db(state.a_w, state.omega, self.omega0)
-        self.plot_freq_1d.set_after_curve(wl_nm, psd_db)
+        intensity: Optional[np.ndarray] = None
+        t_ps: Optional[np.ndarray] = None
+        wl_nm: Optional[np.ndarray] = None
+        psd_db: Optional[np.ndarray] = None
 
-
-        # Update Live 2D Map
-        if self.live_step_idx < self.live_time_map.shape[0]:
-            idx = self.live_step_idx
-            self.live_time_map[idx, :] = 10.0 * np.log10((intensity + 1e-30) / (np.max(intensity) + 1e-30))
-            self.live_freq_map[idx, :] = np.interp(self.display_wl, wl_nm, psd_db)
-
-            if self.current_sim_type == "spectrum_vs_distance":
-                self.live_y_coords[idx] = state.z * 100.0
+        if is_time_domain:
+            t_ps = envelope_to_time_ps(state.t)
+            intensity = np.abs(state.a_t) ** 2
+            if len(t_ps) > 1024:
+                ds = len(t_ps) // 1024
+                self.plot_time_1d.set_after_curve(t_ps[::ds], intensity[::ds])
             else:
-                self.live_y_coords[idx] = state.power / 1e3
+                self.plot_time_1d.set_after_curve(t_ps, intensity)
+        else:
+            wl_nm, psd_db = spectrum_to_db(state.a_w, state.omega, self.omega0)
+            if len(wl_nm) > 1024:
+                ds = len(wl_nm) // 1024
+                self.plot_freq_1d.set_after_curve(wl_nm[::ds], psd_db[::ds])
+            else:
+                self.plot_freq_1d.set_after_curve(wl_nm, psd_db)
 
-            y_min = float(self.live_y_coords[0])
-            y_max = float(self.live_y_coords[idx]) if self.live_y_coords[idx] > y_min else y_min + 1.0
+        # Decimate 2D waterfall image updates to ~6.6 Hz (>= 150 ms) to minimize image copy/LUT overhead
+        now = time.perf_counter()
+        if force or (now - getattr(self, "_last_2d_update_time", 0.0) >= 0.15):
+            self._last_2d_update_time = now
+            if self.live_step_idx < self.live_time_map.shape[0]:
+                idx = self.live_step_idx
+                if self.current_sim_type == "spectrum_vs_distance":
+                    self.live_y_coords[idx] = state.z * 100.0
+                else:
+                    self.live_y_coords[idx] = state.power / 1e3
 
-            wl_min = float(self.display_wl[0])
-            wl_max = float(self.display_wl[-1])
+                y_min = float(self.live_y_coords[0])
+                y_max = float(self.live_y_coords[idx]) if self.live_y_coords[idx] > y_min else y_min + 1.0
 
-            self.plot_freq_2d.update_data(self.live_freq_map[:idx+1, :], (wl_min, wl_max), (y_min, y_max))
+                if is_time_domain:
+                    if intensity is None:
+                        intensity = np.abs(state.a_t) ** 2
+                    if t_ps is None:
+                        t_ps = envelope_to_time_ps(state.t)
+                    self.live_time_map[idx, :] = 10.0 * np.log10((intensity + 1e-30) / (np.max(intensity) + 1e-30))
+                    self.plot_time_2d.update_data(
+                        self.live_time_map[:idx + 1, :],
+                        (float(t_ps[0]), float(t_ps[-1])),
+                        (y_min, y_max),
+                    )
+                else:
+                    if wl_nm is None or psd_db is None:
+                        wl_nm, psd_db = spectrum_to_db(state.a_w, state.omega, self.omega0)
+                    self.live_freq_map[idx, :] = np.interp(self.display_wl, wl_nm, psd_db)
+                    wl_min = float(self.display_wl[0])
+                    wl_max = float(self.display_wl[-1])
+                    self.plot_freq_2d.update_data(
+                        self.live_freq_map[:idx + 1, :],
+                        (wl_min, wl_max),
+                        (y_min, y_max),
+                    )
 
-            if self.current_sim_type == "spectrum_vs_distance":
-                self.plot_time_2d.update_data(self.live_time_map[:idx+1, :], (float(t_ps[0]), float(t_ps[-1])), (y_min, y_max))
-
-            self.live_step_idx += 1
+                self.live_step_idx += 1
 
     def render_full_simulation(self, final_state: SimulationState, history: List[SimulationState]) -> None:
         """Render completed 2D density maps, final 1D profiles, and activate scrubber."""

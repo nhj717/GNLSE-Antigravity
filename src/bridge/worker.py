@@ -33,12 +33,15 @@ class SolverWorker(QObject):
         self._is_interrupted = threading.Event()
         self._is_paused = threading.Event()
         self._is_paused.set()  # Not paused by default (set means running)
-        self.throttler = SignalThrottler(max_fps=60.0, display_live=True)
+        self.throttler = SignalThrottler(max_fps=15.0, display_live=True)
         self._running = False
         self._pulse: Optional[PulseConfig] = None
         self._fiber: Optional[FiberConfig] = None
         self._solver: Optional[SolverConfig] = None
         self._display_live: bool = True
+        self._latest_state: Optional[SimulationState] = None
+        self._state_lock = threading.Lock()
+        self._has_new_state: bool = False
 
     def setup(
         self,
@@ -54,6 +57,17 @@ class SolverWorker(QObject):
         self._display_live = display_live
         self._is_interrupted.clear()
         self._is_paused.set()
+        with self._state_lock:
+            self._latest_state = None
+            self._has_new_state = False
+
+    def get_latest_state(self) -> Optional[SimulationState]:
+        """Atomically fetch and consume the latest simulation state for GUI rendering."""
+        with self._state_lock:
+            if self._has_new_state:
+                self._has_new_state = False
+                return self._latest_state
+            return None
 
     @pyqtSlot()
     def start(self) -> None:
@@ -139,20 +153,20 @@ class SolverWorker(QObject):
                 current_coord = state.z if solver.simulation_type == "spectrum_vs_distance" else state.power
                 now = time.perf_counter()
 
-                # Progress updates (capped at 20 Hz to reduce signal overhead)
-                if now - last_progress_emit >= 0.05:
+                # Progress updates (capped at 10 Hz to reduce signal & layout overhead)
+                if now - last_progress_emit >= 0.10:
                     self.progress_updated.emit(state.step, current_coord, total_target)
                     last_progress_emit = now
 
-                # Terminal heartbeat for visibility
-                if now - last_terminal_log >= 1.0:
-                    pct = (current_coord / total_target * 100.0) if total_target > 0 else 100.0
-                    print(f"[SolverWorker] Progress: {current_coord*100:.2f} cm / {total_target*100:.2f} cm ({pct:.1f}%), step = {state.step}, h = {state.h*1e6:.2f} um", flush=True)
-                    last_terminal_log = now
+                # Real-time state buffering for non-blocking GUI polling
+                if display_live:
+                    with self._state_lock:
+                        self._latest_state = state
+                        self._has_new_state = True
 
-                # Real-time state animation throttling
-                if self.throttler.should_emit(now):
-                    self.state_updated.emit(state)
+                    # Real-time state animation throttling (legacy signal emission if external listener is connected)
+                    if self.receivers(self.state_updated) > 0 and self.throttler.should_emit(now):
+                        self.state_updated.emit(state)
 
             elapsed = time.perf_counter() - start_time
             steps = final_state.step if final_state else 0

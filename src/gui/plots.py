@@ -11,12 +11,12 @@ from __future__ import annotations
 import math
 import numpy as np
 import pyqtgraph as pg
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSlider
+from PyQt6.QtCore import Qt, QSizeF
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSlider, QGraphicsWidget
 from typing import Optional, Tuple, List
 
-# Enable antialiasing for publication-quality curves
-pg.setConfigOptions(antialias=True, background="k", foreground="w")
+# High-performance real-time plotting without software rasterization stalls
+pg.setConfigOptions(antialias=False, background="k", foreground="w")
 
 C_LIGHT = 299792458.0  # Speed of light in m/s
 
@@ -181,24 +181,45 @@ class LinePlotWidget(QWidget):
         self.curve_before = self.plot_item.plot(
             pen=pg.mkPen(color="#0099FF", width=2),
             name="before (Input at z = 0)",
+            autoDownsample=True,
+            clipToView=True,
         )
         # 'after' curve: Orange (Hex #FF8800)
         self.curve_after = self.plot_item.plot(
             pen=pg.mkPen(color="#FF8800", width=2),
             name="after (Current z)",
+            autoDownsample=True,
+            clipToView=True,
         )
+
+        # Match bottom row and height of DensityMapWidget's horizontal colorbar (Row 4: 10px, Row 5: 67px)
+        # Ensures bottom axes (X axis tick marks and labels) align at identical vertical pixel heights
+        self.plot_item.layout.setRowFixedHeight(4, 10.0)
+        self._bottom_spacer = QGraphicsWidget()
+        self._bottom_spacer.setPreferredSize(QSizeF(100, 67))
+        self._bottom_spacer.setMinimumHeight(67)
+        self._bottom_spacer.setMaximumHeight(67)
+        self.plot_item.layout.addItem(self._bottom_spacer, 5, 1)
 
         layout.addWidget(self.plot_widget)
 
     def set_before_curve(self, x: np.ndarray, y: np.ndarray) -> None:
         self._raw_before_x = np.asarray(x, dtype=float)
         self._raw_before_y = np.asarray(y, dtype=float)
-        self._render_curves()
+        self._render_before_curve()
 
     def set_after_curve(self, x: np.ndarray, y: np.ndarray, label: Optional[str] = None) -> None:
         self._raw_after_x = np.asarray(x, dtype=float)
         self._raw_after_y = np.asarray(y, dtype=float)
-        self._render_curves()
+        # Stable Y-axis headroom to eliminate continuous AxisItem redraws and tick regeneration
+        if self.scale_mode == "linear" and len(self._raw_after_y) > 0:
+            y_max_data = float(np.max(self._raw_after_y))
+            current_y_range = self.plot_item.viewRange()[1]
+            current_y_max = float(current_y_range[1])
+            if y_max_data > current_y_max * 0.95 or current_y_max <= 0:
+                new_max = max(y_max_data * 1.25, 1.0)
+                self.plot_item.setYRange(0.0, new_max, padding=0.0)
+        self._render_after_curve()
 
     def set_scale_mode(self, mode: str) -> None:
         """Switch between 'linear' and 'log_db' display scaling."""
@@ -211,10 +232,10 @@ class LinePlotWidget(QWidget):
         else:
             self.plot_item.setLabel("left", self.default_y_label)
             self.plot_item.enableAutoRange(axis="y")
-        self._render_curves()
+        self._render_before_curve()
+        self._render_after_curve()
 
-    def _render_curves(self) -> None:
-        # Before curve
+    def _render_before_curve(self) -> None:
         if len(self._raw_before_x) > 0 and len(self._raw_before_y) > 0:
             if self.scale_mode == "log_db" and "Intensity" in self.default_y_label:
                 y_max = max(float(np.max(self._raw_before_y)), 1e-30)
@@ -223,7 +244,7 @@ class LinePlotWidget(QWidget):
             else:
                 self.curve_before.setData(self._raw_before_x, self._raw_before_y)
 
-        # After curve
+    def _render_after_curve(self) -> None:
         if len(self._raw_after_x) > 0 and len(self._raw_after_y) > 0:
             if self.scale_mode == "log_db" and "Intensity" in self.default_y_label:
                 y_max = max(float(np.max(self._raw_after_y)), 1e-30)

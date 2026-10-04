@@ -1,6 +1,6 @@
 """Compiled C-accelerated stepping routines for GNLSE solver engine.
 
-Leverages compiled gnlse_c_kernel (AVX2 SIMD fused operations) and scipy.fft
+Leverages compiled gnlse_c_kernel (AVX2 SIMD fused operations) and pyFFTW / scipy.fft
 to accelerate the inner RK4IP, S-SSFM, and SSFM numerical loops.
 """
 
@@ -8,9 +8,33 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 import numpy as np
-import scipy.fft as sf
-
+from . import fft_backend as sf
 from . import gnlse_c_kernel
+
+_RAMAN_CACHE: dict = {}
+_EXP_CACHE: dict = {}
+
+
+def _raman_conj_half(raman_fft: np.ndarray, dt: float) -> np.ndarray:
+    """Cached dt * conj(R[:N/2+1]) used for rfft-based Raman convolution."""
+    return sf._get_raman_conj_half(raman_fft, dt)
+
+
+def _raman_conv(int_t: np.ndarray, raman_fft: np.ndarray, dt: float) -> np.ndarray:
+    """Real Raman convolution dt*Re[FFT(IFFT(I)*R)] via real FFTs."""
+    return sf.raman_convolution(int_t, raman_fft, dt)
+
+
+def _exp_cached(coef: float, d_omega: np.ndarray) -> np.ndarray:
+    """exp(coef * d_omega) with a tiny cache (adaptive step-doubling reuses h/2 many times)."""
+    key = (id(d_omega), coef)
+    ent = _EXP_CACHE.get(key)
+    if ent is None or ent[0] is not d_omega:
+        if len(_EXP_CACHE) > 16:
+            _EXP_CACHE.clear()
+        ent = (d_omega, np.exp(coef * d_omega))
+        _EXP_CACHE[key] = ent
+    return ent[1]
 
 
 def c_nonlinear_operator(
@@ -21,21 +45,37 @@ def c_nonlinear_operator(
     raman_fr: float,
     dt: float = 1.0,
 ) -> np.ndarray:
-    """Evaluate nonlinear operator N(A) using C fused envelope arithmetic."""
+    """Evaluate nonlinear operator N(A) using C fused envelope arithmetic and FFTW."""
     n = len(a_t)
-    b_t = np.empty(n, dtype=np.complex128)
-    intensity = np.empty(n, dtype=np.float64)
-    conv = None
+    if sf.get_fft_backend() == "pyfftw" and sf.HAVE_PYFFTW:
+        p = sf.get_plan_context(n)
+        conv = None
+        if raman_fr > 0.0 and raman_fft is not None:
+            gnlse_c_kernel.fused_intensity(a_t, p.rin)
+            p.cin[:] = p.rin
+            p.plan_c2c_bwd(normalise_idft=True)
+            p.cin[:] = p.cout * (dt * raman_fft)
+            p.plan_c2c_fwd()
+            conv = np.real(p.cout)
 
-    if raman_fr > 0.0 and raman_fft is not None:
-        int_t = np.abs(a_t) ** 2
-        conv = np.real(dt * sf.fft(sf.ifft(int_t) * raman_fft))
+        gnlse_c_kernel.fused_nonlinear_bt(a_t, conv, raman_fr, p.cin, p.rin)
+        p.plan_c2c_bwd(normalise_idft=True)
+        m_w = np.empty(n, dtype=np.complex128)
+        gnlse_c_kernel.fused_apply_shock_gamma(p.cout, shock_factor, gamma, m_w)
+        return m_w
+    else:
+        b_t = np.empty(n, dtype=np.complex128)
+        intensity = np.empty(n, dtype=np.float64)
+        conv = None
+        if raman_fr > 0.0 and raman_fft is not None:
+            gnlse_c_kernel.fused_intensity(a_t, intensity)
+            conv = np.real(dt * sf.fft(sf.ifft(intensity) * raman_fft))
 
-    gnlse_c_kernel.fused_nonlinear_bt(a_t, conv, raman_fr, b_t, intensity)
-    b_w = sf.ifft(b_t)
-    m_w = np.empty(n, dtype=np.complex128)
-    gnlse_c_kernel.fused_apply_shock_gamma(b_w, shock_factor, gamma, m_w)
-    return m_w
+        gnlse_c_kernel.fused_nonlinear_bt(a_t, conv, raman_fr, b_t, intensity)
+        b_w = sf.ifft(b_t)
+        m_w = np.empty(n, dtype=np.complex128)
+        gnlse_c_kernel.fused_apply_shock_gamma(b_w, shock_factor, gamma, m_w)
+        return m_w
 
 
 def step_rk4ip_c(
@@ -52,7 +92,7 @@ def step_rk4ip_c(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Execute a single step h using C-accelerated RK4IP (Hult 2007)."""
     n = len(a_t)
-    exp_half_d = np.exp(0.5 * h * d_omega)
+    exp_half_d = _exp_cached(0.5 * h, d_omega)
 
     # 1. Interaction picture midpoint A_I
     a_i_w = np.empty(n, dtype=np.complex128)
@@ -110,9 +150,11 @@ def _c_nonlinear_step(
     """
     has_shock = (shock_factor is not None) and not np.allclose(shock_factor, 1.0)
     if not has_shock:
-        int_t = np.abs(a_t) ** 2
+        n = len(a_t)
+        int_t = np.empty(n, dtype=np.float64)
+        gnlse_c_kernel.fused_intensity(a_t, int_t)
         if raman_fr > 0.0 and raman_fft is not None:
-            conv = np.real(dt * sf.fft(sf.ifft(int_t) * raman_fft))
+            conv = sf.raman_convolution(int_t, raman_fft, dt)
             b_eff = (1.0 - raman_fr) * int_t + raman_fr * conv
         else:
             b_eff = int_t
@@ -154,7 +196,7 @@ def step_sssfm_c(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Execute a single step h using C-accelerated S-SSFM."""
     n = len(a_t)
-    exp_half_d = np.exp(0.5 * h * d_omega)
+    exp_half_d = _exp_cached(0.5 * h, d_omega)
 
     # 1. First half linear dispersion step
     a_half_w = np.empty(n, dtype=np.complex128)
@@ -189,7 +231,7 @@ def step_ssfm_c(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Execute a single step h using C-accelerated standard SSFM."""
     n = len(a_t)
-    exp_d = np.exp(h * d_omega)
+    exp_d = _exp_cached(h, d_omega)
 
     a_disp_w = np.empty(n, dtype=np.complex128)
     gnlse_c_kernel.fused_linear_step(a_w, exp_d, a_disp_w)
